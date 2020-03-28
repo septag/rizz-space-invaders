@@ -1,0 +1,17 @@
+{
+  "folders": [
+    {
+      "name": "rizz",
+      "path": "../../rizz"
+    },
+    {
+      "name": "space-invaders",
+      "path": "../src"
+    }
+  ],
+  "settings": {
+    "cmake.buildDirectory": "C:/Projects/space-invaders/build",
+    "cmake.sourceDirectory": "C:/Projects/space-invaders/src",
+    "C_Cpp.intelliSenseCachePath": "C:/Projects/space-invaders/build"
+  }
+}
