@@ -31,6 +31,7 @@ Thumbs.db
 /.idea/libraries
 /build
 /build-*
+/src/build
 /captures
 
 # assets

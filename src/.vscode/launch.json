@@ -11,7 +11,7 @@
             "program": "${workspaceFolder}/../bin/rizz.exe",
             "args": ["--run", "space-invaders.dll"],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/../bin/",
+            "cwd": "${workspaceFolder}/../bin",
             "environment": [],
             "externalConsole": false
         }

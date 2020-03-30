@@ -10,8 +10,8 @@
     }
   ],
   "settings": {
-    "cmake.buildDirectory": "C:/Projects/space-invaders/build",
-    "cmake.sourceDirectory": "C:/Projects/space-invaders/src",
-    "C_Cpp.intelliSenseCachePath": "C:/Projects/space-invaders/build"
+    "cmake.buildDirectory": "${workspaceRoot}/build",
+    "cmake.sourceDirectory": "${workspaceRoot}",
+    "C_Cpp.intelliSenseCachePath": "${workspaceRoot}/build"
   }
 }
