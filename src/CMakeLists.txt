@@ -9,4 +9,4 @@ add_subdirectory(../../rizz rizz)
 
 rizz_add_executable(space-invaders main.c)
 
-add_dependencies(space-invaders imgui)
+add_dependencies(space-invaders imgui sound 2dtools)
