@@ -1,4 +1,5 @@
 #include "sx/allocator.h"
+#include "sx/bitarray.h"
 #include "sx/math.h"
 #include "sx/string.h"
 #include "sx/timer.h"
@@ -6,7 +7,11 @@
 #include "rizz/2dtools.h"
 #include "rizz/imgui-extra.h"
 #include "rizz/imgui.h"
+#include "rizz/input.h"
 #include "rizz/rizz.h"
+
+#define CUTE_C2_IMPLEMENTATION
+#include "cute_c2.h"
 
 RIZZ_STATE static rizz_api_core* the_core;
 RIZZ_STATE static rizz_api_gfx* the_gfx;
@@ -19,21 +24,39 @@ RIZZ_STATE static rizz_api_vfs* the_vfs;
 RIZZ_STATE static rizz_api_sprite* the_sprite;
 RIZZ_STATE static rizz_api_plugin* the_plugin;
 RIZZ_STATE static rizz_api_camera* the_camera;
+RIZZ_STATE static rizz_api_input* the_input;
 
 RIZZ_STATE rizz_gfx_stage g_stage;
 
 #define ENEMIES_PER_ROW 11
 #define NUM_ROWS 5
 #define MAX_ENEMIES (ENEMIES_PER_ROW * NUM_ROWS)
-#define MAX_BULLETS 6
+#define MAX_BULLETS 20
 #define GAME_BOARD_WIDTH 1.0f
-#define ENEMY_WAIT_DURATION 0.7f
+#define GAME_BOARD_HEIGHT 1.2f
+#define ENEMY_WAIT_DURATION 0.5f
+#define PLAYER_BULLET_INTERVAL 0.5f
+#define ENEMY_EXPLODE_TIME 0.2f
+#define ENEMY_SHOOT_INTERVAL 1.0f
+#define ENEMY_TILE_MOVE_DURATION 0.5f
+#define PLAYER_EXPLOSION_DURATION 1.0f
+#define NUM_COVERS 4
+
+#define KEY_LEFT 1
+#define KEY_RIGHT 2
+#define KEY_SHOOT 3
 
 typedef enum enemy_direction_t {
     ENEMY_MOVEMENT_RIGHT = 0,
     ENEMY_MOVEMENT_DOWN,
     ENEMY_MOVEMENT_LEFT
 } enemy_direction_t;
+
+typedef enum bullet_type_t {
+    BULLET_TYPE_PLAYER = 0,
+    BULLET_TYPE_ALIEN1,
+    BULLET_TYPE_COUNT
+} bullet_type_t;
 
 typedef struct enemy_t {
     sx_vec2 start_pos;
@@ -42,23 +65,26 @@ typedef struct enemy_t {
     float wait_tm;
     float move_tm;
     float wait_duration;
-    float xoffset;
-    enemy_direction_t move_dir;
+    int xstep;
+    enemy_direction_t dir;
+    float shoot_wait_interval;
     bool move;
+    bool allow_next_move;
+    bool dead;
 } enemy_t;
-
-typedef struct bullet_t {
-    sx_vec2 pos;
-    float t;
-} bullet_t;
 
 typedef struct player_t {
     sx_vec2 pos;
-    float t;
+    float bullet_tm;
+    rizz_sprite sprite;
+    float speed;
+    bool dead;
 } player_t;
 
 typedef struct cover_t {
     sx_vec2 pos;
+    int health;
+    bool dead;
 } cover_t;
 
 typedef struct saucer_t {
@@ -66,30 +92,116 @@ typedef struct saucer_t {
     float t;
 } saucer_t;
 
+typedef struct bullet_t {
+    sx_vec2 pos;
+    bullet_type_t type;
+    rizz_sprite sprite;
+    float speed;
+    int damage;
+} bullet_t;
+
+typedef struct explosion_t {
+    sx_vec2 pos;
+    rizz_sprite sprite;
+    float wait_tm;
+} explosion_t;
+
+typedef struct collision_data_t {
+    int bullet_index;
+    int hit_index;
+} collision_data_t;
+
 typedef struct game_t {
     enemy_t enemies[MAX_ENEMIES];
-    bullet_t bullets[MAX_BULLETS];
+    enemy_t dummy_enemy;
+    cover_t covers[NUM_COVERS];
+    rizz_sprite bullet_sprites[BULLET_TYPE_COUNT];
     rizz_sprite_animclip enemy_idle_clips[MAX_ENEMIES];
     rizz_sprite enemy_sprites[MAX_ENEMIES];
+    rizz_sprite enemy_explosion_sprite;
+    rizz_sprite bounds_explosion_sprite;
+    rizz_sprite cover_sprite;
     rizz_sprite_animclip enemy_clips[MAX_ENEMIES];
+    bullet_t bullets[MAX_BULLETS];
     int num_bullets;
+    int num_bullets_spawned;
+    explosion_t explosions[MAX_BULLETS];
+    int num_explosions;
+    int num_explosions_spawned;
     player_t player;
     rizz_asset game_atlas;
     rizz_camera cam;
-    float enemy_move_dist;
-    float enemy_move_duration;
+    rizz_input_device keyboard;
     float tile_size;
-    enemy_direction_t enemy_move_dir;
-    enemy_direction_t enemy_next_move_dir;
-    enemy_t enemy_group_controller;
+    bool enemy_explosion;
+    float enemy_explosion_tm;
+    sx_vec2 enemy_explosion_pos;
+    float enemy_shoot_tm;
+    float enemy_shoot_interval;
+    float game_over_point;
+    explosion_t player_explosion;
+    int player_lives;
+    bool player_died;
 } game_t;
 
 RIZZ_STATE static game_t the_game;
 
+static void refresh_game()
+{
+    float tile_size = the_game.tile_size;
+    float half_width = GAME_BOARD_WIDTH * 0.5f;
+    float start_x = -half_width + 2.5f * tile_size;
+    float x = start_x;
+    float y = GAME_BOARD_HEIGHT * 0.5f - tile_size;
+
+    for (int i = 0; i < MAX_ENEMIES; i++) {
+        if (i % 11 == 0) {
+            x = start_x;
+            y -= tile_size;
+        }
+
+        the_game.enemies[i].dead = false;
+        the_game.enemies[i].xstep = 0;
+        the_game.enemies[i].shoot_wait_interval = 0;
+        the_game.enemies[i].move_tm = 0;
+        the_game.enemies[i].wait_tm = 0;
+        the_game.enemies[i].move = 0;
+        the_game.enemies[i].pos = sx_vec2f(x, y);
+        the_game.enemies[i].start_pos = the_game.enemies[i].pos;
+        the_game.enemies[i].target_pos = the_game.enemies[i].pos;
+        the_game.enemies[i].dir = 0;
+
+        float dd = ((float)i / (float)MAX_ENEMIES);
+        the_game.enemies[i].wait_duration = dd + ENEMY_WAIT_DURATION;
+        the_game.enemies[i].allow_next_move = true;
+
+        x += tile_size;
+    }
+
+    for (int i = 0; i < NUM_COVERS; i++) {
+        the_game.covers[i].dead = false;
+        the_game.covers[i].health = 100;
+    }
+
+    sx_memset(&the_game.dummy_enemy, 0x0, sizeof(the_game.dummy_enemy));
+    the_game.dummy_enemy.allow_next_move = true;
+    the_game.dummy_enemy.wait_duration = 1.0f + ENEMY_WAIT_DURATION;
+
+    player_t* player = &the_game.player;
+    player->bullet_tm = 0;
+    player->pos = sx_vec2f(0, -GAME_BOARD_HEIGHT * 0.5f + the_game.tile_size * 2.0f);
+    player->bullet_tm = PLAYER_BULLET_INTERVAL;
+
+    the_game.num_bullets_spawned = the_game.num_bullets = 0;
+    the_game.num_explosions_spawned = the_game.num_explosions = 0;
+
+    the_game.player_lives = 1;
+}
+
 static void create_enemies()
 {
     float half_width = GAME_BOARD_WIDTH * 0.5f;
-    float tile_size = GAME_BOARD_WIDTH / 15.0f;
+    float tile_size = the_game.tile_size;
 
     the_game.game_atlas =
         the_asset->load("atlas", "/assets/sprites/game-sprites",
@@ -128,7 +240,7 @@ static void create_enemies()
 
     float start_x = -half_width + 2.5f * tile_size;
     float x = start_x;
-    float y = tile_size * NUM_ROWS;
+    float y = GAME_BOARD_HEIGHT * 0.5f - tile_size;
     for (int i = 0; i < MAX_ENEMIES; i++) {
         if (i % 11 == 0) {
             x = start_x;
@@ -141,12 +253,12 @@ static void create_enemies()
             &(rizz_sprite_animclip_desc){ .atlas = the_game.game_atlas,
                                           .frames = frame_descs[enemy],
                                           .num_frames = 2,
-                                          .fps = /*the_core->randf()*0.2f + 0.7f*/ 0.8f });
+                                          .fps = the_core->randf() * 0.1f + 0.8f });
 
         the_game.enemy_sprites[i] =
             the_sprite->create(&(rizz_sprite_desc){ .name = enemy_names[enemy],
                                                     .atlas = the_game.game_atlas,
-                                                    .size = sx_vec2f(tile_size * 0.7f, 0),
+                                                    .size = sx_vec2f(tile_size * 0.8f, 0),
                                                     .color = sx_colorn((0xffffffff)),
                                                     .clip = the_game.enemy_clips[i] });
 
@@ -155,15 +267,139 @@ static void create_enemies()
 
         float dd = ((float)i / (float)MAX_ENEMIES);
         the_game.enemies[i].wait_duration = dd + ENEMY_WAIT_DURATION;
+        the_game.enemies[i].allow_next_move = true;
+
+        switch (enemy) {
+        case 0:
+            the_game.enemies[i].shoot_wait_interval = 1.0f;
+            break;
+        case 1:
+            the_game.enemies[i].shoot_wait_interval = 2.0f;
+            break;
+        case 2:
+            the_game.enemies[i].shoot_wait_interval = 3.0f;
+            break;
+        }
 
         x += tile_size;
     }
 
-    // enemy group properties
-    float group_width = x - start_x;
-    the_game.enemy_move_dist = /*(GAME_BOARD_WIDTH - group_width) * 0.5f - tile_size * 0.5f*/tile_size*2.0f - tile_size*0.5f;
-    the_game.enemy_move_duration = 0.5f;
-    the_game.tile_size = tile_size;
+    the_game.dummy_enemy.allow_next_move = true;
+    the_game.dummy_enemy.wait_duration = 1.0f + ENEMY_WAIT_DURATION;
+}
+
+static void create_player()
+{
+    player_t* player = &the_game.player;
+    player->sprite = the_sprite->create(&(rizz_sprite_desc){ .name = "player.png",
+                                                             .atlas = the_game.game_atlas,
+                                                             .size = the_game.tile_size,
+                                                             .color = sx_colorn(0xffffffff) });
+    player->pos = sx_vec2f(0, -GAME_BOARD_HEIGHT * 0.5f + the_game.tile_size * 2.0f);
+    player->speed = 0.1f;
+    player->bullet_tm = PLAYER_BULLET_INTERVAL;
+}
+
+static void create_bullet_sprites()
+{
+    static const char* bullet_names[BULLET_TYPE_COUNT] = { "bullet0.png", "bullet1.png" };
+
+    const float bullet_sizes[BULLET_TYPE_COUNT] = { the_game.tile_size * 0.5f,
+                                                    the_game.tile_size * 0.5f };
+    const float bullet_origins[BULLET_TYPE_COUNT] = { -0.5f, 0.5f };
+    for (int i = 0; i < BULLET_TYPE_COUNT; i++) {
+        the_game.bullet_sprites[i] =
+            the_sprite->create(&(rizz_sprite_desc){ .name = bullet_names[i],
+                                                    .atlas = the_game.game_atlas,
+                                                    .size = sx_vec2f(0, bullet_sizes[i]),
+                                                    .origin = sx_vec2f(0, bullet_origins[i]),
+                                                    .color = sx_colorn(0xffffffff) });
+    }
+}
+
+static void create_explosion_sprites()
+{
+    the_game.enemy_explosion_sprite =
+        the_sprite->create(&(rizz_sprite_desc){ .name = "explode.png",
+                                                .atlas = the_game.game_atlas,
+                                                .size = sx_vec2f(the_game.tile_size, 0),
+                                                .color = sx_colorn(0xffffffff) });
+    the_game.bounds_explosion_sprite =
+        the_sprite->create(&(rizz_sprite_desc){ .name = "explode2.png",
+                                                .atlas = the_game.game_atlas,
+                                                .size = sx_vec2f(the_game.tile_size, 0),
+                                                .origin = sx_vec2f(0, -0.5f) });
+}
+
+static void create_bullet(sx_vec2 pos, bullet_type_t type)
+{
+    sx_assert(type < BULLET_TYPE_COUNT);
+
+    static const float bullet_speeds[BULLET_TYPE_COUNT] = { 1.5f, 0.75f };
+    static const int bullet_damages[BULLET_TYPE_COUNT] = { 10, 20 };
+
+    bullet_t bullet = { .pos = pos,
+                        .type = type,
+                        .sprite = the_game.bullet_sprites[type],
+                        .damage = bullet_damages[type],
+                        .speed =
+                            bullet_speeds[type] * (type == BULLET_TYPE_PLAYER ? 1.0f : -1.0f) };
+
+    ++the_game.num_bullets_spawned;
+
+    int index;
+    if (the_game.num_bullets < MAX_BULLETS) {
+        index = the_game.num_bullets;
+        ++the_game.num_bullets;
+    } else {
+        index = the_game.num_bullets_spawned % MAX_BULLETS;
+    }
+
+    the_game.bullets[index] = bullet;
+}
+
+static void create_explosion(sx_vec2 pos, rizz_sprite sprite)
+{
+    explosion_t explosion = { .pos = pos, .sprite = sprite };
+    ++the_game.num_explosions_spawned;
+
+    int index;
+    if (the_game.num_explosions < MAX_BULLETS) {
+        index = the_game.num_explosions;
+        ++the_game.num_explosions;
+    } else {
+        index = the_game.num_explosions_spawned % MAX_BULLETS;
+    }
+
+    the_game.explosions[index] = explosion;
+}
+
+static void remove_bullet(int index)
+{
+    if (index < the_game.num_bullets - 1) {
+        the_game.bullets[index] = the_game.bullets[the_game.num_bullets - 1];
+    }
+
+    --the_game.num_bullets;
+}
+
+static void create_covers(void)
+{
+    float tile_size = GAME_BOARD_WIDTH / 9.0f;
+    float half_width = GAME_BOARD_WIDTH * 0.5f;
+    int count = 0;
+    for (float x = -half_width + tile_size; x < half_width && count < NUM_COVERS;
+         x += tile_size * 2.0f) {
+        cover_t* cover = &the_game.covers[count++];
+        cover->pos = sx_vec2f(x, -GAME_BOARD_HEIGHT * 0.5f + tile_size * 2.0f);
+        cover->health = 100;
+    }
+
+    the_game.cover_sprite =
+        the_sprite->create(&(rizz_sprite_desc){ .name = "cover.png",
+                                                .atlas = the_game.game_atlas,
+                                                .size = sx_vec2f(tile_size, 0),
+                                                .origin = sx_vec2f(-0.5f, -0.5f) });
 }
 
 static bool init()
@@ -185,81 +421,398 @@ static bool init()
                      sx_rectf(-view_width, -view_height, view_width, view_height), -5.0f, 5.0f);
     the_camera->lookat(&the_game.cam, sx_vec3f(0, 0.0f, 1.0), SX_VEC3_ZERO, SX_VEC3_UNITY);
 
+    //
+    the_game.keyboard = the_input->create_device(RIZZ_INPUT_DEVICETYPE_KEYBOARD);
+    the_input->map_bool(the_game.keyboard, RIZZ_INPUT_KBKEY_LEFT, KEY_LEFT);
+    the_input->map_bool(the_game.keyboard, RIZZ_INPUT_KBKEY_RIGHT, KEY_RIGHT);
+    the_input->map_bool(the_game.keyboard, RIZZ_INPUT_KBKEY_SPACE, KEY_SHOOT);
+
+    // TODO: creating sprites should be easier (from data)
+    //
+    the_game.tile_size = GAME_BOARD_WIDTH / 15.0f;
+    the_game.enemy_shoot_interval = ENEMY_SHOOT_INTERVAL;
+    the_game.player_lives = 1;
+
     create_enemies();
+    create_player();
+    create_bullet_sprites();
+    create_explosion_sprites();
+    create_covers();
 
     return true;
 }
 
 static void shutdown() {}
 
-static void update(float dt)
+static void update_enemy(enemy_t* e, float dt)
 {
-    the_sprite->animclip_update_batch(the_game.enemy_clips, MAX_ENEMIES, dt);
+    if (!e->move && e->allow_next_move) {
+        e->wait_tm += dt;
+        if (e->wait_tm >= e->wait_duration) {
+            e->wait_tm = 0;
+            switch (e->dir) {
+            case ENEMY_MOVEMENT_DOWN:
+                e->target_pos = sx_vec2f(e->pos.x, e->pos.y - the_game.tile_size);
+                break;
+            case ENEMY_MOVEMENT_LEFT:
+                e->target_pos = sx_vec2f(e->pos.x - the_game.tile_size, e->pos.y);
+                break;
+            case ENEMY_MOVEMENT_RIGHT:
+                e->target_pos = sx_vec2f(e->pos.x + the_game.tile_size, e->pos.y);
+                break;
+            }
+            e->move = true;
+        }
+    } else if (e->allow_next_move) {
+        // move to target
+        float t = e->move_tm / ENEMY_TILE_MOVE_DURATION;
+        t = sx_min(e->move_tm, 1.0f);
+        e->pos = sx_vec2_lerp(e->start_pos, e->target_pos, t);
+        e->move_tm += dt;
 
-    enemy_direction_t dir;
-    bool allow_change_dir = true;
-    for (int i = 0; i < MAX_ENEMIES - 1; i++) {
-        if (the_game.enemies[i].move_dir != the_game.enemies[i+1].move_dir) {
-            allow_change_dir = false;
+        if (t >= 1.0f) {
+            if (e->dir == ENEMY_MOVEMENT_LEFT) {
+                --e->xstep;
+                if (e->xstep <= -2) {
+                    e->dir = ENEMY_MOVEMENT_DOWN;
+                }
+            } else if (e->dir == ENEMY_MOVEMENT_RIGHT) {
+                ++e->xstep;
+                if (e->xstep >= 2) {
+                    e->dir = ENEMY_MOVEMENT_DOWN;
+                }
+            } else if (e->dir == ENEMY_MOVEMENT_DOWN) {
+                e->dir = e->xstep < 0 ? ENEMY_MOVEMENT_RIGHT : ENEMY_MOVEMENT_LEFT;
+            }
+
+            e->move_tm = 0;
+            e->start_pos = e->target_pos;
+            e->move = false;
+            e->allow_next_move = false;
+        }
+    }
+}
+
+static void update_player(float dt)
+{
+    if (the_game.player_died) {
+        return;
+    }
+
+    player_t* player = &the_game.player;
+    const float speed = 0.4f;
+    if (the_input->get_bool(KEY_LEFT)) {
+        float left_limit = -GAME_BOARD_WIDTH * 0.5f +
+                           sx_rect_width(the_sprite->draw_bounds(the_game.player.sprite)) * 0.5f +
+                           the_game.tile_size * 0.1f;
+        player->pos.x -= dt * speed;
+        player->pos.x = sx_max(left_limit, player->pos.x);
+    }
+
+    if (the_input->get_bool(KEY_RIGHT)) {
+        float right_limit = GAME_BOARD_WIDTH * 0.5f -
+                            sx_rect_width(the_sprite->draw_bounds(the_game.player.sprite)) * 0.5f -
+                            the_game.tile_size * 0.1f;
+        player->pos.x += dt * speed;
+        player->pos.x = sx_min(right_limit, player->pos.x);
+    }
+
+    player->bullet_tm += dt;
+    if (the_input->get_bool(KEY_SHOOT) && !the_game.enemy_explosion) {
+        if (player->bullet_tm > PLAYER_BULLET_INTERVAL) {
+            create_bullet(
+                sx_vec2f(player->pos.x,
+                         player->pos.y +
+                             sx_rect_height(the_sprite->draw_bounds(player->sprite)) * 0.5f),
+                BULLET_TYPE_PLAYER);
+            player->bullet_tm = 0;
+        }
+    }
+}
+
+static void check_bullet_collision_cb(int start, int end, int thrd_index, void* user)
+{
+    collision_data_t* cdata = user;
+
+    if (cdata->hit_index != -1) {
+        return;
+    }
+
+    bullet_t* bullet = &the_game.bullets[cdata->bullet_index];
+    sx_rect bullet_rc = sx_rect_move(the_sprite->draw_bounds(bullet->sprite), bullet->pos);
+    c2AABB bullet_aabb = { { bullet_rc.xmin, bullet_rc.ymax }, { bullet_rc.xmax, bullet_rc.ymin } };
+
+    for (int i = start; i < end; i++) {
+        if (the_game.enemies[i].dead) {
+            continue;
+        }
+
+        sx_rect enemy_rc = sx_rect_move(the_sprite->draw_bounds(the_game.enemy_sprites[i]),
+                                        the_game.enemies[i].pos);
+        c2AABB enemy_aabb = { { enemy_rc.xmin, enemy_rc.ymax }, { enemy_rc.xmax, enemy_rc.ymin } };
+        if (c2AABBtoAABB(bullet_aabb, enemy_aabb)) {
+            cdata->hit_index = i;
             break;
         }
-        dir = the_game.enemies[i].move_dir;
     }
-    if (allow_change_dir) {
-        the_game.enemy_move_dir = dir;
-    }
+}
 
-    // update enemy movement
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        enemy_t* e = &the_game.enemies[i];
-        if (!e->move) {
-            e->wait_tm += dt;
-            if (e->wait_tm >= e->wait_duration && e->move_dir == the_game.enemy_move_dir) {
-                e->wait_tm = 0;
-                switch (the_game.enemy_move_dir) {
-                case ENEMY_MOVEMENT_DOWN:
-                    e->target_pos = sx_vec2f(e->pos.x, e->pos.y - the_game.tile_size);
-                    break;
-                case ENEMY_MOVEMENT_LEFT:   
-                    e->target_pos = sx_vec2f(e->pos.x - the_game.tile_size, e->pos.y);
-                    break;
-                case ENEMY_MOVEMENT_RIGHT:  
-                    e->target_pos = sx_vec2f(e->pos.x + the_game.tile_size, e->pos.y);
-                    break;
-                }
-                e->move = true;
+static void kill_player(void)
+{
+    sx_assert(!the_game.player_died);
+
+    the_game.player_died = true;
+    the_game.player_explosion.pos = the_game.player.pos;
+    --the_game.player_lives;
+}
+
+static void update_bullets(float dt)
+{
+    // TODO: remove c2AABB
+    for (int i = 0; i < the_game.num_bullets; i++) {
+        bullet_t* bullet = &the_game.bullets[i];
+
+        bullet->pos.y += bullet->speed * dt;
+
+        if (bullet->pos.y >= GAME_BOARD_HEIGHT * 0.5f ||
+            bullet->pos.y <= -GAME_BOARD_HEIGHT * 0.5f) {
+
+            if (bullet->pos.y <= -GAME_BOARD_HEIGHT * 0.5f) {
+                create_explosion(sx_vec2f(bullet->pos.x, -GAME_BOARD_HEIGHT * 0.5f),
+                                 the_game.bounds_explosion_sprite);
             }
-        } else {
-            // move to target
-            float t = e->move_tm / the_game.enemy_move_duration;
-            t = sx_min(e->move_tm, 1.0f);
-            e->pos = sx_vec2_lerp(e->start_pos, e->target_pos, t);
-            e->move_tm += dt;
 
-            if (t >= 1.0f) {
-                e->move_tm = 0;
-                e->xoffset += (e->target_pos.x - e->start_pos.x);
-                e->start_pos = e->target_pos;
-                e->move = false;
+            remove_bullet(i);
+            i--;
+            continue;
+        }
 
-                // change direction
-                if (the_game.enemy_move_dir == ENEMY_MOVEMENT_LEFT &&
-                    e->xoffset <= -the_game.enemy_move_dist) {
-                    e->move_dir = ENEMY_MOVEMENT_DOWN;
-                    the_game.enemy_next_move_dir = ENEMY_MOVEMENT_RIGHT;
-                } else if (the_game.enemy_move_dir == ENEMY_MOVEMENT_RIGHT &&
-                           e->xoffset >= the_game.enemy_move_dist) {
-                    e->move_dir = ENEMY_MOVEMENT_DOWN;
-                    the_game.enemy_next_move_dir = ENEMY_MOVEMENT_LEFT;
-                } else if (the_game.enemy_move_dir = ENEMY_MOVEMENT_DOWN) {
-                    e->move_dir = the_game.enemy_next_move_dir;
+        sx_rect bullet_rc = sx_rect_move(the_sprite->draw_bounds(bullet->sprite), bullet->pos);
+        c2AABB bullet_aabb = { { bullet_rc.xmin, bullet_rc.ymax },
+                               { bullet_rc.xmax, bullet_rc.ymin } };
+
+        // check collision with the world based on bullet type
+        if (bullet->type == BULLET_TYPE_PLAYER) {
+            collision_data_t cdata = { .bullet_index = i, .hit_index = -1 };
+            sx_job_t job = the_core->job_dispatch(MAX_ENEMIES, check_bullet_collision_cb, &cdata,
+                                                  SX_JOB_PRIORITY_NORMAL, 0);
+            the_core->job_wait_and_del(job);
+            if (cdata.hit_index != -1) {
+                the_game.enemies[cdata.hit_index].dead = true;
+
+                // enter explosion state
+                the_game.enemy_explosion = true;
+                the_game.enemy_explosion_tm = 0;
+                the_game.enemy_explosion_pos = the_game.enemies[cdata.hit_index].pos;
+
+                remove_bullet(i);
+                i--;
+                continue;
+            }
+        } else if (bullet->type == BULLET_TYPE_ALIEN1) {
+            // check collision with player
+            sx_rect player_rc =
+                sx_rect_move(the_sprite->draw_bounds(the_game.player.sprite), the_game.player.pos);
+            c2AABB player_aabb = { { player_rc.xmin, player_rc.ymax },
+                                   { player_rc.xmax, player_rc.ymin } };
+            if (c2AABBtoAABB(bullet_aabb, player_aabb) && !the_game.player_died) {
+                kill_player();
+
+                remove_bullet(i);
+                i--;
+                continue;
+            }
+        }
+
+        // collision with covers
+        {
+            bool bullet_hit = false;
+            for (int ic = 0; ic < NUM_COVERS; ic++) {
+                cover_t* cover = &the_game.covers[ic];
+                if (!cover->dead) {
+                    sx_rect cover_rc =
+                        sx_rect_move(the_sprite->draw_bounds(the_game.cover_sprite), cover->pos);
+                    c2AABB cover_aabb = { { cover_rc.xmin, cover_rc.ymax },
+                                          { cover_rc.xmax, cover_rc.ymin } };
+                    if (c2AABBtoAABB(bullet_aabb, cover_aabb)) {
+                        bullet_hit = true;
+                        cover->health -= bullet->damage;
+                        cover->health = sx_max(cover->health, 0);
+                        create_explosion(bullet->pos, the_game.enemy_explosion_sprite);
+                        if (cover->health <= 0) {
+                            cover->dead = true;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (bullet_hit) {
+                remove_bullet(i);
+                i--;
+                continue;
+            }
+        }
+
+        // collision with other bullets
+        {
+            for (int ib = 0; ib < the_game.num_bullets; ib++) {
+                if (i != ib) {
+                    bullet_t* bullet2 = &the_game.bullets[ib];
+                    sx_rect bullet2_rc =
+                        sx_rect_move(the_sprite->draw_bounds(bullet2->sprite), bullet2->pos);
+                    c2AABB bullet2_aabb = { { bullet2_rc.xmin, bullet2_rc.ymax },
+                                            { bullet2_rc.xmax, bullet2_rc.ymin } };
+                    if (c2AABBtoAABB(bullet_aabb, bullet2_aabb)) {
+                        create_explosion(sx_vec2_mulf(sx_vec2_add(bullet->pos, bullet2->pos), 0.5f),
+                                         the_game.enemy_explosion_sprite);
+                        remove_bullet(ib);
+                        remove_bullet(i);
+                        i--;
+                    }
                 }
             }
         }
     }
 }
 
+static void update_explosions(float dt)
+{
+
+    for (int i = 0; i < the_game.num_explosions; i++) {
+        explosion_t* explosion = &the_game.explosions[i];
+        if (explosion->wait_tm >= ENEMY_EXPLODE_TIME) {
+            if (i < the_game.num_explosions - 1) {
+                the_game.explosions[i] = the_game.explosions[the_game.num_explosions - 1];
+            }
+
+            --the_game.num_explosions;
+            explosion->wait_tm = 0;
+        }
+
+        explosion->wait_tm += dt;
+    }
+}
+
+static int check_collision_with_covers(enemy_t* e) 
+{
+    if (e->pos.y > 0) {
+        return -1;
+    }
+
+    sx_rect enemy_rc = sx_rect_move(the_sprite->draw_bounds(the_game.cover_sprite), e->pos);
+    c2AABB enemy_aabb = { { enemy_rc.xmin, enemy_rc.ymax }, { enemy_rc.xmax, enemy_rc.ymin } };
+
+    for (int i = 0; i < NUM_COVERS; i++) {
+        cover_t* cover = &the_game.covers[i];
+        if (cover->dead) {
+            continue;
+        }
+
+        sx_rect cover_rc = sx_rect_move(the_sprite->draw_bounds(the_game.cover_sprite), cover->pos);
+        c2AABB cover_aabb = { { cover_rc.xmin, cover_rc.ymax }, { cover_rc.xmax, cover_rc.ymin } };
+        
+        if (c2AABBtoAABB(enemy_aabb, cover_aabb)) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+static void update(float dt)
+{
+    float dtp = dt;
+    if (the_game.player_died) {
+        dt = 0;
+    }
+
+    update_player(dt);
+
+    // update enemies
+    {
+        int alive_enemies[MAX_ENEMIES];
+        int num_alive = 0;
+        for (int i = 0; i < MAX_ENEMIES; i++) {
+            enemy_t* e = &the_game.enemies[i];
+            if (!e->dead) {
+                alive_enemies[num_alive++] = i;
+            }
+        }
+
+        float speed = sx_lerp(1.0f, 4.0f, 1.0f - ((float)num_alive / (float)MAX_ENEMIES));
+        float dte = the_game.enemy_explosion ? 0.0f : (dt * speed);
+        the_sprite->animclip_update_batch(the_game.enemy_clips, MAX_ENEMIES, dte);
+
+        for (int i = 0; i < num_alive; i++) {
+            enemy_t* e = &the_game.enemies[alive_enemies[i]];
+            update_enemy(e, dte);
+        }
+        update_enemy(&the_game.dummy_enemy, dte);
+
+        if (!the_game.dummy_enemy.allow_next_move) {
+            for (int i = 0; i < num_alive; i++) {
+                the_game.enemies[alive_enemies[i]].allow_next_move = true;
+            }
+            the_game.dummy_enemy.allow_next_move = true;
+        }
+
+        // enemy shoot
+        if (the_game.enemy_shoot_tm >= the_game.enemy_shoot_interval && num_alive > 0) {
+            int alive_index = the_core->rand_range(0, num_alive - 1);
+            create_bullet(the_game.enemies[alive_enemies[alive_index]].pos, BULLET_TYPE_ALIEN1);
+            the_game.enemy_shoot_tm = 0;
+            the_game.enemy_shoot_interval =
+                ENEMY_SHOOT_INTERVAL + (the_core->randf() * 2.0f - 1.0f) * 0.2f;
+        }
+        the_game.enemy_shoot_tm += dte / speed;
+
+        for (int i = 0; i < num_alive; i++) {
+            enemy_t* e = &the_game.enemies[alive_enemies[i]];
+            int cover_index = check_collision_with_covers(e);
+            if (cover_index != -1) {
+                cover_t* cover = &the_game.covers[cover_index];
+                cover->health -= 30;
+                cover->health = sx_max(cover->health, 0);
+                if (cover->health <= 0) {
+                    cover->dead = true;
+                }
+
+                the_game.enemy_explosion = true;
+                the_game.enemy_explosion_tm = 0;
+                the_game.enemy_explosion_pos = e->pos;
+
+                e->dead = true;
+                break;
+            }
+        }
+    }
+
+
+    update_bullets(dt);
+
+    if (the_game.enemy_explosion) {
+        if (the_game.enemy_explosion_tm >= ENEMY_EXPLODE_TIME) {
+            the_game.enemy_explosion = false;
+        }
+        the_game.enemy_explosion_tm += dt;
+    }
+    update_explosions(dt);
+
+    if (the_game.player_died) {
+        if (the_game.player_explosion.wait_tm >= PLAYER_EXPLOSION_DURATION) {
+            the_game.player_died = false;
+            the_game.player_explosion.wait_tm = 0;
+            if (the_game.player_lives == 0) {
+                refresh_game();
+            }
+        }
+        the_game.player_explosion.wait_tm += dtp;
+    }
+}
+
 static void render()
+
 {
     sg_pass_action pass_action = { .colors[0] = { SG_ACTION_CLEAR, { 0.0f, 0.0f, 0.0f, 1.0f } },
                                    .depth = { SG_ACTION_CLEAR, 1.0f } };
@@ -272,10 +825,82 @@ static void render()
     sx_mat4 vp = sx_mat4_mul(&proj, &view);
 
     sx_mat3 enemy_mats[MAX_ENEMIES];
+    rizz_sprite enemy_sprites[MAX_ENEMIES];
+    int num_enemies = 0;
     for (int i = 0; i < MAX_ENEMIES; i++) {
-        enemy_mats[i] = sx_mat3_translate(the_game.enemies[i].pos.x, the_game.enemies[i].pos.y);
+        if (!the_game.enemies[i].dead) {
+            enemy_mats[num_enemies] = sx_mat3_translatev(the_game.enemies[i].pos);
+            enemy_sprites[num_enemies] = the_game.enemy_sprites[i];
+            num_enemies++;
+        }
     }
-    the_sprite->draw_batch(the_game.enemy_sprites, MAX_ENEMIES, &vp, enemy_mats, NULL);
+    if (num_enemies > 0) {
+        the_sprite->draw_batch(enemy_sprites, num_enemies, &vp, enemy_mats, NULL);
+    }
+
+    // TODO: add another function for drawing by position
+    if (!the_game.player_died) {
+        sx_mat3 player_mat = sx_mat3_translatev(the_game.player.pos);
+        the_sprite->draw(the_game.player.sprite, &vp, &player_mat, SX_COLOR_WHITE);
+    }
+
+    if (the_game.num_bullets > 0) {
+        sx_mat3 bullet_mats[MAX_BULLETS];
+        rizz_sprite bullet_sprites[MAX_BULLETS];
+        for (int i = 0; i < the_game.num_bullets; i++) {
+            bullet_mats[i] = sx_mat3_translatev(the_game.bullets[i].pos);
+            bullet_sprites[i] = the_game.bullets[i].sprite;
+        }
+
+        the_sprite->draw_batch(bullet_sprites, the_game.num_bullets, &vp, bullet_mats, NULL);
+    }
+
+    // explosions
+    {
+        sx_mat3 explosion_mats[MAX_BULLETS + 2];
+        rizz_sprite explosion_sprites[MAX_BULLETS + 2];
+        for (int i = 0; i < the_game.num_explosions; i++) {
+            explosion_mats[i] = sx_mat3_translatev(the_game.explosions[i].pos);
+            explosion_sprites[i] = the_game.explosions[i].sprite;
+        }
+        int num_explosions = the_game.num_explosions;
+
+        if (the_game.enemy_explosion) {
+            explosion_mats[num_explosions] = sx_mat3_translatev(the_game.enemy_explosion_pos);
+            explosion_sprites[num_explosions] = the_game.enemy_explosion_sprite;
+            num_explosions++;
+        }
+
+        if (the_game.player_died) {
+            explosion_mats[num_explosions] = sx_mat3_translatev(the_game.player_explosion.pos);
+            explosion_sprites[num_explosions] = the_game.enemy_explosion_sprite;
+            num_explosions++;
+        }
+
+        if (num_explosions > 0) {
+            the_sprite->draw_batch(explosion_sprites, num_explosions, &vp, explosion_mats, NULL);
+        }
+    }
+
+    // covers
+    {
+        sx_mat3 cover_mats[NUM_COVERS];
+        rizz_sprite cover_sprites[NUM_COVERS];
+        sx_color cover_colors[NUM_COVERS];
+        int count = 0;
+        for (int i = 0; i < NUM_COVERS; i++) {
+            if (!the_game.covers[i].dead) {
+                cover_mats[count] = sx_mat3_translatev(the_game.covers[i].pos);
+                cover_sprites[count] = the_game.cover_sprite;
+                float color_val = (float)the_game.covers[i].health / 100.0f;
+                cover_colors[count] = sx_color4f(1.0f - color_val, color_val, 0, 1.0f);
+                count++;
+            }
+        }
+        if (count > 0) {
+            the_sprite->draw_batch(cover_sprites, count, &vp, cover_mats, cover_colors);
+        }
+    }
 
     the_gfx->staged.end_pass();
     the_gfx->staged.end();
@@ -286,6 +911,7 @@ static void render()
         if (the_imgui->Begin("space-invaders", NULL, 0)) {
             the_imgui->LabelText("Fps", "%.3f", the_core->fps());
         }
+        the_sprite->show_debugger(NULL);
         the_imgui->End();
     }
 }
@@ -308,6 +934,7 @@ rizz_plugin_decl_main(pacman, plugin, e)
         the_asset = plugin->api->get_api(RIZZ_API_ASSET, 0);
         the_imgui = plugin->api->get_api_byname("imgui", 0);
         the_sprite = plugin->api->get_api_byname("sprite", 0);
+        the_input = plugin->api->get_api_byname("input", 0);
 
         the_plugin = plugin->api;
         init();
@@ -333,6 +960,7 @@ rizz_plugin_decl_event_handler(pacman, e)
     case RIZZ_APP_EVENTTYPE_UPDATE_APIS:
         the_imgui = the_plugin->get_api_byname("imgui", 0);
         the_sprite = the_plugin->get_api_byname("sprite", 0);
+        the_input = the_plugin->get_api_byname("input", 0);
         break;
 
     default:
@@ -345,11 +973,12 @@ rizz_game_decl_config(conf)
     conf->app_name = "space-invaders";
     conf->app_version = 1000;
     conf->app_title = "space-invaders";
-    conf->window_width = 800;
-    conf->window_height = 600;
+    conf->window_width = 600;
+    conf->window_height = 800;
     conf->core_flags |= RIZZ_CORE_FLAG_VERBOSE;
     conf->multisample_count = 4;
     conf->swap_interval = 1;
     conf->plugins[0] = "imgui";
     conf->plugins[1] = "2dtools";
+    conf->plugins[2] = "input";
 }

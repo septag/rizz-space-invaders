@@ -7,6 +7,6 @@ set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(../../rizz rizz)
 
-rizz_add_executable(space-invaders main.c)
+rizz_add_executable(space-invaders main.c cute_c2.h)
 
-add_dependencies(space-invaders imgui sound 2dtools)
+add_dependencies(space-invaders imgui sound 2dtools input)

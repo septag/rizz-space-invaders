@@ -1,0 +1,1 @@
+..\..\..\rizz\tools\windows\atlasc -i enemy1-a.png -i enemy1-b.png -i enemy2-a.png -i enemy2-b.png -i enemy3-a.png -i enemy3-b.png -i explode.png -i explode2.png -i player.png -i bullet0.png -i bullet1.png -i cover.png -i saucer.png -o ..\..\assets\sprites\game-sprites
