@@ -3,7 +3,7 @@ Space Invaders game remake with [_rizz_](https://github.com/septag/rizz) framewo
 
 It demonstrates how to make a simple game with _rizz_ and shows multiple features, which some of them were not necessary for this type of game, but implemented as a test for the framework:
 
-- Basic game setup and initiaization
+- Basic game setup and initialization
 - 2D Sprites and basic animations
 - Audio
 - Input (keyboard + gamepad)
@@ -35,7 +35,7 @@ cmake ..\src -G "Visual Studio 16 2019"
 
 Then simply open the visual studio solution, build and run! 
 
-Please **note** that you need to set working directory to _space-invaders_ project root (`$(ProjectDir)..\` in msvc), and because that the current build type is HOST (see [Host vs Buundle](http://glitterbombg.com/devblog/posts/rizz-basics/#builds/“host”vs.“bundle”build) builds), you need to run the game through rizz host executable. which will be `rizz.exe --run space-invaders.dll`. For msvc debugger, it would be `bin\$(Configuration)\rizz.exe --run bin\$(Configuration)\space-invaders.dll` for command-line arguments.
+Please **note** that you need to set working directory to _space-invaders_ project root (`$(ProjectDir)..\` in msvc), and because that the current build type is HOST (see [Host vs Bundle](http://glitterbombg.com/devblog/posts/rizz-basics/#builds/“host”vs.“bundle”build) builds), you need to run the game through rizz host executable. which will be `rizz.exe --run space-invaders.dll`. For msvc debugger, it would be `bin\$(Configuration)\rizz.exe --run bin\$(Configuration)\space-invaders.dll` for command-line arguments.
 
 **Example**: To build the game in bundle mode (stand-alone executable), configure the project using previous commands and set BUNDLE properties:
 
