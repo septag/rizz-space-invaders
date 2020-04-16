@@ -44,7 +44,7 @@ RIZZ_STATE static rizz_api_font* the_font;
 #define PLAYER_EXPLOSION_DURATION 1.0f
 #define NUM_COVERS 4
 #define HEARTBEAT_INTERVAL 1.5f
-#define NUM_LIVES 2
+#define NUM_LIVES 3
 #define GAME_STATE_DURATION 2000
 
 #define KEY_LEFT 1

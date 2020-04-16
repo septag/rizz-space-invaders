@@ -1,6 +1,8 @@
 # rizz-space-invaders
 Space Invaders game remake with [_rizz_](https://github.com/septag/rizz) framework
 
+![space-invaders](art/space-invaders.gif)
+
 ## Build
 
 First, clone the _rizz_ and _space-invaders_ repos to your root project folder:
@@ -34,7 +36,7 @@ cmake ..\src  -G "Visual Studio 16 2019"  -DBUNDLE=1 -DBUNDLE_TARGET=space-invad
 These arguments indicate that we are building stand-alone executable (BUNDLE=1), target name is `space_invaders` (name of the game in main.c), and cmake project name is `space-invaders` (-DBUNDLE_TARGET=space-invaders). And needs to embed multiple plugins: `imgui/sound/2dtools/input`.
 
 ## Controls
-Use left/right arrow keys to move and _SPACE_ to shoot.
+Use left/right arrow keys to move and _SPACE_ to shoot.  
 You can also use gamepad (xbox controller), left analog stick to move and A key too shoot.
 
 
