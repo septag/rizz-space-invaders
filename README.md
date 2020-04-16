@@ -1,6 +1,16 @@
 # rizz-space-invaders
 Space Invaders game remake with [_rizz_](https://github.com/septag/rizz) framework
 
+It demonstrates how to make a simple game with _rizz_ and shows multiple features, which some of them were not necessary for this type of game, but implemented as a test for the framework:
+
+- Basic game setup and initiaization
+- 2D Sprites and basic animations
+- Audio
+- Input (keyboard + gamepad)
+- Coroutines (scene transitions)
+- Job Dispatcher (used for collision detection, which is silly in this case of course!)
+- Fonts and text
+
 ![space-invaders](art/space-invaders.gif)
 
 ## Build
