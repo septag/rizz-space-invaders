@@ -3,12 +3,14 @@
 #include "sx/math.h"
 #include "sx/string.h"
 #include "sx/timer.h"
+#include "sx/os.h"
 
 #include "rizz/2dtools.h"
 #include "rizz/imgui-extra.h"
 #include "rizz/imgui.h"
 #include "rizz/input.h"
 #include "rizz/rizz.h"
+#include "rizz/sound.h"
 
 #define CUTE_C2_IMPLEMENTATION
 #include "cute_c2.h"
@@ -25,8 +27,8 @@ RIZZ_STATE static rizz_api_sprite* the_sprite;
 RIZZ_STATE static rizz_api_plugin* the_plugin;
 RIZZ_STATE static rizz_api_camera* the_camera;
 RIZZ_STATE static rizz_api_input* the_input;
-
-RIZZ_STATE rizz_gfx_stage g_stage;
+RIZZ_STATE static rizz_api_snd* the_sound;
+RIZZ_STATE static rizz_api_font* the_font;
 
 #define ENEMIES_PER_ROW 11
 #define NUM_ROWS 5
@@ -41,10 +43,16 @@ RIZZ_STATE rizz_gfx_stage g_stage;
 #define ENEMY_TILE_MOVE_DURATION 0.5f
 #define PLAYER_EXPLOSION_DURATION 1.0f
 #define NUM_COVERS 4
+#define HEARTBEAT_INTERVAL 1.5f
+#define NUM_LIVES 2
+#define GAME_STATE_DURATION 2000
 
 #define KEY_LEFT 1
 #define KEY_RIGHT 2
 #define KEY_SHOOT 3
+#define KEY_MOVEX_ANALOG 4
+
+#define SCORE_FOURCC sx_makefourcc('S', 'C', 'O', 'R')
 
 typedef enum enemy_direction_t {
     ENEMY_MOVEMENT_RIGHT = 0,
@@ -58,16 +66,44 @@ typedef enum bullet_type_t {
     BULLET_TYPE_COUNT
 } bullet_type_t;
 
+typedef enum sound_type_t {
+    SOUND_EXPLODE1 = 0,
+    SOUND_EXPLODE2,
+    SOUND_EXPLODE3,
+    SOUND_EXPLODE4,
+    SOUND_HEARTBEAT,
+    SOUND_HIT,
+    SOUND_SHOOT,
+    SOUND_WIN,
+    SOUND_BONUS,
+    SOUND_SAUCER,
+    SOUND_COUNT
+} sound_type_t;
+
+typedef enum render_stage_t {
+    RENDER_STAGE_GAME = 0,
+    RENDER_STAGE_UI,
+    RENDER_STAGE_COUNT
+} render_stage_t;
+
+typedef enum game_state_t {
+    GAME_STATE_INGAME = 0,
+    GAME_STATE_GAMEOVER,
+    GAME_STATE_WIN
+} game_state_t;
+
 typedef struct enemy_t {
     sx_vec2 start_pos;
     sx_vec2 target_pos;
     sx_vec2 pos;
+    sound_type_t explode_sound;
     float wait_tm;
     float move_tm;
     float wait_duration;
     int xstep;
     enemy_direction_t dir;
     float shoot_wait_interval;
+    int hit_score;
     bool move;
     bool allow_next_move;
     bool dead;
@@ -88,8 +124,14 @@ typedef struct cover_t {
 } cover_t;
 
 typedef struct saucer_t {
+    bool dead;
     sx_vec2 pos;
+    rizz_sprite sprite;
     float t;
+    float speed;
+    float wait_tm;
+    float wait_duration;
+    int hit_score;
 } saucer_t;
 
 typedef struct bullet_t {
@@ -122,7 +164,9 @@ typedef struct game_t {
     rizz_sprite bounds_explosion_sprite;
     rizz_sprite cover_sprite;
     rizz_sprite_animclip enemy_clips[MAX_ENEMIES];
+    rizz_asset sounds[SOUND_COUNT];
     bullet_t bullets[MAX_BULLETS];
+    saucer_t saucer;
     int num_bullets;
     int num_bullets_spawned;
     explosion_t explosions[MAX_BULLETS];
@@ -132,6 +176,7 @@ typedef struct game_t {
     rizz_asset game_atlas;
     rizz_camera cam;
     rizz_input_device keyboard;
+    rizz_input_device gamepad;
     float tile_size;
     bool enemy_explosion;
     float enemy_explosion_tm;
@@ -142,17 +187,72 @@ typedef struct game_t {
     explosion_t player_explosion;
     int player_lives;
     bool player_died;
+    float heartbeat_tm;
+    int player_score;
+    rizz_gfx_stage render_stages[RENDER_STAGE_COUNT];
+    rizz_asset font;
+    game_state_t state;
+    int stage;
+    int high_score;
 } game_t;
 
 RIZZ_STATE static game_t the_game;
 
-static void refresh_game()
+static void create_sounds(void)
+{
+    static const char* sound_files[SOUND_COUNT] = {
+        "explode1.wav",
+        "explode2.wav",
+        "explode3.wav",
+        "explode4.wav",
+        "heartbeat.wav",
+        "hit.wav",
+        "shoot.wav",
+        "win.wav",
+        "bonus.wav",
+        "saucer.wav"
+    };
+
+    char filepath[128];
+    rizz_snd_load_params sparams = { 0 };
+    for (int i = 0; i < SOUND_COUNT; i++) {
+        sx_snprintf(filepath, sizeof(filepath), "/assets/sounds/%s", sound_files[i]);
+        the_game.sounds[i] = the_asset->load("sound", filepath, &sparams, 0, NULL, 0);
+    }
+}
+
+static void save_high_score(void) 
+{
+    sx_file_writer writer;
+    if (sx_file_open_writer(&writer, "highscore.dat", 0)) {
+        uint32_t sign = SCORE_FOURCC;
+        sx_file_write(&writer, &sign, sizeof(sign));
+        sx_file_write(&writer, &the_game.high_score, sizeof(the_game.high_score));
+        sx_file_close_writer(&writer);
+    }
+}
+
+static void load_high_score(void)
+{
+    sx_file_reader reader;
+    if (sx_file_open_reader(&reader, "highscore.dat")) {
+        uint32_t sign;
+        sx_file_read(&reader, &sign, sizeof(sign));
+        if (sign != SCORE_FOURCC) {
+            sx_file_read(&reader, &the_game.high_score, sizeof(the_game.high_score));
+        }
+        sx_file_close_reader(&reader);
+    }
+}
+
+
+static void refresh_game(void)
 {
     float tile_size = the_game.tile_size;
     float half_width = GAME_BOARD_WIDTH * 0.5f;
     float start_x = -half_width + 2.5f * tile_size;
     float x = start_x;
-    float y = GAME_BOARD_HEIGHT * 0.5f - tile_size;
+    float y = GAME_BOARD_HEIGHT * 0.5f - tile_size - tile_size*0.5f*((float)the_game.stage);
 
     for (int i = 0; i < MAX_ENEMIES; i++) {
         if (i % 11 == 0) {
@@ -186,6 +286,7 @@ static void refresh_game()
     sx_memset(&the_game.dummy_enemy, 0x0, sizeof(the_game.dummy_enemy));
     the_game.dummy_enemy.allow_next_move = true;
     the_game.dummy_enemy.wait_duration = 1.0f + ENEMY_WAIT_DURATION;
+    the_game.dummy_enemy.dead = true;
 
     player_t* player = &the_game.player;
     player->bullet_tm = 0;
@@ -195,26 +296,46 @@ static void refresh_game()
     the_game.num_bullets_spawned = the_game.num_bullets = 0;
     the_game.num_explosions_spawned = the_game.num_explosions = 0;
 
-    the_game.player_lives = 1;
+    the_game.saucer.dead = true;
+
+    the_sound->stop_all();
+
+    the_game.player_lives = NUM_LIVES;
+    the_game.stage = 0;
 }
+
+rizz_coro_declare(state_control)
+{
+    if (the_game.player_score > the_game.high_score) {
+        the_game.high_score = the_game.player_score;
+        save_high_score();
+    }
+    
+    if (the_game.state == GAME_STATE_GAMEOVER) {
+        the_game.player_score = 0;
+    }
+
+    rizz_coro_wait(GAME_STATE_DURATION);
+    refresh_game();
+    the_game.state = GAME_STATE_INGAME;
+    rizz_coro_end();
+}
+
 
 static void create_enemies()
 {
     float half_width = GAME_BOARD_WIDTH * 0.5f;
     float tile_size = the_game.tile_size;
 
-    the_game.game_atlas =
-        the_asset->load("atlas", "/assets/sprites/game-sprites",
-                        &(rizz_atlas_load_params){ .min_filter = SG_FILTER_NEAREST,
-                                                   .mag_filter = SG_FILTER_NEAREST },
-                        0, NULL, 0);
-
     static const rizz_sprite_animclip_frame_desc enemy1_frames[] = { { .name = "enemy1-a.png" },
-                                                                     { .name = "enemy1-b.png" } };
+                                                                     { .name = "enemy1-b.png" },
+                                                                     { 0 } };
     static const rizz_sprite_animclip_frame_desc enemy2_frames[] = { { .name = "enemy2-a.png" },
-                                                                     { .name = "enemy2-b.png" } };
+                                                                     { .name = "enemy2-b.png" },
+                                                                     { 0 } };
     static const rizz_sprite_animclip_frame_desc enemy3_frames[] = { { .name = "enemy3-a.png" },
-                                                                     { .name = "enemy3-b.png" } };
+                                                                     { .name = "enemy3-b.png" },
+                                                                     { 0 } };
 
     // clang-format off
     static const int layout[MAX_ENEMIES] = {
@@ -229,6 +350,18 @@ static void create_enemies()
         "enemy3",
         "enemy1",
         "enemy2"
+    };
+
+    static const int hit_scores[3] = {
+        10,
+        15,
+        20
+    };
+
+    static sound_type_t enemy_explode_sounds[3] = {
+        SOUND_EXPLODE3,
+        SOUND_EXPLODE1,
+        SOUND_EXPLODE2
     };
 
     static const rizz_sprite_animclip_frame_desc* frame_descs[3] = {
@@ -252,7 +385,6 @@ static void create_enemies()
         the_game.enemy_clips[i] = the_sprite->animclip_create(
             &(rizz_sprite_animclip_desc){ .atlas = the_game.game_atlas,
                                           .frames = frame_descs[enemy],
-                                          .num_frames = 2,
                                           .fps = the_core->randf() * 0.1f + 0.8f });
 
         the_game.enemy_sprites[i] =
@@ -264,10 +396,12 @@ static void create_enemies()
 
         the_game.enemies[i].pos = sx_vec2f(x, y);
         the_game.enemies[i].start_pos = the_game.enemies[i].pos;
+        the_game.enemies[i].explode_sound = enemy_explode_sounds[enemy];
 
         float dd = ((float)i / (float)MAX_ENEMIES);
         the_game.enemies[i].wait_duration = dd + ENEMY_WAIT_DURATION;
         the_game.enemies[i].allow_next_move = true;
+        the_game.enemies[i].hit_score = hit_scores[enemy];
 
         switch (enemy) {
         case 0:
@@ -285,6 +419,7 @@ static void create_enemies()
     }
 
     the_game.dummy_enemy.allow_next_move = true;
+    the_game.dummy_enemy.dead = true;
     the_game.dummy_enemy.wait_duration = 1.0f + ENEMY_WAIT_DURATION;
 }
 
@@ -374,6 +509,18 @@ static void create_explosion(sx_vec2 pos, rizz_sprite sprite)
     the_game.explosions[index] = explosion;
 }
 
+static void create_saucer(void)
+{
+    rizz_sprite sprite =
+        the_sprite->create(&(rizz_sprite_desc){ .name = "saucer.png",
+                                                .atlas = the_game.game_atlas,
+                                                .size = sx_vec2f(the_game.tile_size, 0) });
+    the_game.saucer = (saucer_t){ .dead = true,
+                                  .sprite = sprite,
+                                  .wait_duration = 30.0f + (the_core->randf() * 20.0f - 10.0f),
+                                  .hit_score = 100 };
+}
+
 static void remove_bullet(int index)
 {
     if (index < the_game.num_bullets - 1) {
@@ -404,12 +551,14 @@ static void create_covers(void)
 
 static bool init()
 {
-    // register main graphics stage.
-    // at least one stage should be registered if you want to draw anything
-    g_stage = the_gfx->stage_register("main", (rizz_gfx_stage){ .id = 0 });
-    sx_assert(g_stage.id);
+    the_game.render_stages[RENDER_STAGE_GAME] =
+        the_gfx->stage_register("game", (rizz_gfx_stage){ .id = 0 });
+    the_game.render_stages[RENDER_STAGE_UI] =
+        the_gfx->stage_register("ui", the_game.render_stages[RENDER_STAGE_GAME]);
+    sx_assert(the_game.render_stages[RENDER_STAGE_GAME].id);
+    sx_assert(the_game.render_stages[RENDER_STAGE_UI].id);
 
-    the_vfs->mount("../../assets", "/assets");
+    the_vfs->mount("assets", "/assets");
 
     // camera
     // projection: setup for ortho, total-width = GAME_BOARD_WIDTH
@@ -427,17 +576,46 @@ static bool init()
     the_input->map_bool(the_game.keyboard, RIZZ_INPUT_KBKEY_RIGHT, KEY_RIGHT);
     the_input->map_bool(the_game.keyboard, RIZZ_INPUT_KBKEY_SPACE, KEY_SHOOT);
 
+    the_game.gamepad = the_input->create_device(RIZZ_INPUT_DEVICETYPE_PAD);
+    if (the_game.gamepad.id) {
+        the_input->map_float(the_game.gamepad, RIZZ_INPUT_PADBUTTON_LEFTSTICKX, KEY_MOVEX_ANALOG, 0,
+                             1.0f,
+                             NULL, NULL);
+        the_input->map_bool(the_game.gamepad, RIZZ_INPUT_PADBUTTON_A, KEY_SHOOT);
+    }
+
+    // graphics and fonts
+    the_game.game_atlas =
+        the_asset->load("atlas", "/assets/sprites/game-sprites",
+                        &(rizz_atlas_load_params){ .min_filter = SG_FILTER_NEAREST,
+                                                   .mag_filter = SG_FILTER_NEAREST },
+                        0, NULL, 0);
+    the_game.font = the_asset->load("font", "/assets/fonts/5x5_pixel.ttf",
+                                    &(rizz_font_load_params){ 0 }, 0, NULL, 0);
+
     // TODO: creating sprites should be easier (from data)
     //
     the_game.tile_size = GAME_BOARD_WIDTH / 15.0f;
     the_game.enemy_shoot_interval = ENEMY_SHOOT_INTERVAL;
-    the_game.player_lives = 1;
+    the_game.player_lives = NUM_LIVES;
 
     create_enemies();
     create_player();
     create_bullet_sprites();
     create_explosion_sprites();
     create_covers();
+    create_sounds();
+    create_saucer();
+
+    // first bus (#0) is used for sfx
+    // second bus (#1) is used for heart-beat music effect
+    the_sound->bus_set_max_lanes(0, 4);
+    the_sound->bus_set_max_lanes(1, 1);
+
+    the_sound->set_master_volume(0.1f);
+
+    // load high score
+    load_high_score();
 
     return true;
 }
@@ -491,6 +669,28 @@ static void update_enemy(enemy_t* e, float dt)
             e->allow_next_move = false;
         }
     }
+
+    if (!e->dead && e->pos.y <= (the_game.player.pos.y + the_game.tile_size*0.5f)) {
+        the_game.state = GAME_STATE_GAMEOVER;
+        rizz_coro_invoke(state_control, NULL);
+    }
+}
+
+static void spawn_saucer(void)
+{
+    float side = sx_sign(the_core->randf() * 2.0f - 1.0f);
+    if (side == 0) {
+        side = 1.0f;
+    }
+
+    saucer_t* saucer = &the_game.saucer;
+    saucer->pos.x = side * (GAME_BOARD_WIDTH * 0.5f + the_game.tile_size);
+    saucer->pos.y = GAME_BOARD_HEIGHT * 0.5f - the_game.tile_size;
+    saucer->speed = -side * 0.3f;
+    saucer->wait_duration = 30.0f + (the_core->randf() * 20.0f - 10.0f);
+    saucer->dead = false;
+
+    the_sound->play(the_sound->source_get(the_game.sounds[SOUND_SAUCER]), 0, 1.0f, 0, false);
 }
 
 static void update_player(float dt)
@@ -500,7 +700,7 @@ static void update_player(float dt)
     }
 
     player_t* player = &the_game.player;
-    const float speed = 0.4f;
+    float speed = 0.4f;
     if (the_input->get_bool(KEY_LEFT)) {
         float left_limit = -GAME_BOARD_WIDTH * 0.5f +
                            sx_rect_width(the_sprite->draw_bounds(the_game.player.sprite)) * 0.5f +
@@ -517,6 +717,21 @@ static void update_player(float dt)
         player->pos.x = sx_min(right_limit, player->pos.x);
     }
 
+    { // analog stick
+        float right_limit = GAME_BOARD_WIDTH * 0.5f -
+                            sx_rect_width(the_sprite->draw_bounds(the_game.player.sprite)) * 0.5f -
+                            the_game.tile_size * 0.1f;
+        float left_limit = -GAME_BOARD_WIDTH * 0.5f +
+                           sx_rect_width(the_sprite->draw_bounds(the_game.player.sprite)) * 0.5f +
+                           the_game.tile_size * 0.1f;
+        float movex_analog = the_input->get_float(KEY_MOVEX_ANALOG);
+        movex_analog = sx_sign(movex_analog) * sx_easeout_quad(sx_abs(movex_analog));
+        speed = movex_analog * speed;
+        player->pos.x += dt * speed;
+        player->pos.x = sx_clamp(player->pos.x, left_limit, right_limit);
+    }
+    
+
     player->bullet_tm += dt;
     if (the_input->get_bool(KEY_SHOOT) && !the_game.enemy_explosion) {
         if (player->bullet_tm > PLAYER_BULLET_INTERVAL) {
@@ -526,6 +741,8 @@ static void update_player(float dt)
                              sx_rect_height(the_sprite->draw_bounds(player->sprite)) * 0.5f),
                 BULLET_TYPE_PLAYER);
             player->bullet_tm = 0;
+
+            the_sound->play(the_sound->source_get(the_game.sounds[SOUND_SHOOT]), 0, 1.0f, 0, false);
         }
     }
 }
@@ -564,6 +781,23 @@ static void kill_player(void)
     the_game.player_died = true;
     the_game.player_explosion.pos = the_game.player.pos;
     --the_game.player_lives;
+
+    the_sound->play(the_sound->source_get(the_game.sounds[SOUND_EXPLODE4]), 0, 1.0f, 0, false);
+}
+
+static void kill_saucer(void)
+{
+    saucer_t* saucer = &the_game.saucer;
+
+    saucer->dead = true;
+
+    the_game.enemy_explosion = true;
+    the_game.enemy_explosion_tm = 0;
+    the_game.enemy_explosion_pos = saucer->pos;
+
+    the_game.player_score += saucer->hit_score;
+
+    the_sound->play(the_sound->source_get(the_game.sounds[SOUND_BONUS]), 1, 1.0f, 0, false);
 }
 
 static void update_bullets(float dt)
@@ -605,9 +839,31 @@ static void update_bullets(float dt)
                 the_game.enemy_explosion_tm = 0;
                 the_game.enemy_explosion_pos = the_game.enemies[cdata.hit_index].pos;
 
+                the_game.player_score += the_game.enemies[cdata.hit_index].hit_score;
+
+                the_sound->play(
+                    the_sound->source_get(
+                        the_game.sounds[the_game.enemies[cdata.hit_index].explode_sound]),
+                    0, 1.0f, 0, false);
+
                 remove_bullet(i);
                 i--;
                 continue;
+            }
+
+            // collision of the player bullet with saucer
+            saucer_t* saucer = &the_game.saucer;
+            if (!saucer->dead) {
+                sx_rect saucer_rc =
+                    sx_rect_move(the_sprite->draw_bounds(saucer->sprite), saucer->pos);
+                c2AABB saucer_aabb = { { saucer_rc.xmin, saucer_rc.ymax },
+                                       { saucer_rc.xmax, saucer_rc.ymin } };
+                if (c2AABBtoAABB(saucer_aabb, bullet_aabb)) {
+                    kill_saucer();
+                    remove_bullet(i);
+                    i--;
+                    continue;
+                }
             }
         } else if (bullet->type == BULLET_TYPE_ALIEN1) {
             // check collision with player
@@ -639,6 +895,8 @@ static void update_bullets(float dt)
                         cover->health -= bullet->damage;
                         cover->health = sx_max(cover->health, 0);
                         create_explosion(bullet->pos, the_game.enemy_explosion_sprite);
+                        the_sound->play(the_sound->source_get(the_game.sounds[SOUND_HIT]), 0, 1.0f,
+                                        0, false);
                         if (cover->health <= 0) {
                             cover->dead = true;
                         }
@@ -668,6 +926,8 @@ static void update_bullets(float dt)
                                          the_game.enemy_explosion_sprite);
                         remove_bullet(ib);
                         remove_bullet(i);
+                        the_sound->play(the_sound->source_get(the_game.sounds[SOUND_HIT]), 0, 1.0f,
+                                        0, false);
                         i--;
                     }
                 }
@@ -678,7 +938,6 @@ static void update_bullets(float dt)
 
 static void update_explosions(float dt)
 {
-
     for (int i = 0; i < the_game.num_explosions; i++) {
         explosion_t* explosion = &the_game.explosions[i];
         if (explosion->wait_tm >= ENEMY_EXPLODE_TIME) {
@@ -722,7 +981,13 @@ static int check_collision_with_covers(enemy_t* e)
 
 static void update(float dt)
 {
+    if (the_game.state != GAME_STATE_INGAME) {
+        return;
+    }
+
     float dtp = dt;
+    float dte;
+
     if (the_game.player_died) {
         dt = 0;
     }
@@ -740,8 +1005,15 @@ static void update(float dt)
             }
         }
 
+        if (num_alive == 0) {
+            // player won the game
+            the_game.state = GAME_STATE_WIN;
+            ++the_game.stage;
+            rizz_coro_invoke(state_control, NULL);
+        }
+
         float speed = sx_lerp(1.0f, 4.0f, 1.0f - ((float)num_alive / (float)MAX_ENEMIES));
-        float dte = the_game.enemy_explosion ? 0.0f : (dt * speed);
+        dte = the_game.enemy_explosion ? 0.0f : (dt * speed);
         the_sprite->animclip_update_batch(the_game.enemy_clips, MAX_ENEMIES, dte);
 
         for (int i = 0; i < num_alive; i++) {
@@ -782,6 +1054,9 @@ static void update(float dt)
                 the_game.enemy_explosion_tm = 0;
                 the_game.enemy_explosion_pos = e->pos;
 
+                the_sound->play(the_sound->source_get(the_game.sounds[e->explode_sound]), 0, 1.0f,
+                                0, false);
+
                 e->dead = true;
                 break;
             }
@@ -804,21 +1079,90 @@ static void update(float dt)
             the_game.player_died = false;
             the_game.player_explosion.wait_tm = 0;
             if (the_game.player_lives == 0) {
-                refresh_game();
+                the_game.state = GAME_STATE_GAMEOVER;
+                rizz_coro_invoke(state_control, NULL);
             }
         }
         the_game.player_explosion.wait_tm += dtp;
     }
+
+    // saucer
+    saucer_t* saucer = &the_game.saucer;
+    if (saucer->dead) {
+        if (saucer->wait_tm >= saucer->wait_duration) {
+            spawn_saucer();
+            saucer->wait_tm = 0;
+        }
+        saucer->wait_tm += dt;
+    } else {
+        saucer->pos.x += saucer->speed * dt;
+        if (saucer->pos.x < (-GAME_BOARD_WIDTH*0.5f - the_game.tile_size) ||
+            saucer->pos.x > (GAME_BOARD_WIDTH*0.5f + the_game.tile_size))
+        {
+            saucer->dead = true;
+        }
+    }
+
+     // heartbeat sound
+    the_game.heartbeat_tm += dte;
+    if (the_game.heartbeat_tm >= HEARTBEAT_INTERVAL) {
+        the_sound->play(the_sound->source_get(the_game.sounds[SOUND_HEARTBEAT]), 1, 1.0f, 0, false);
+        the_game.heartbeat_tm = 0;
+    }
 }
 
-static void render()
-
+static void render_info_screen(game_state_t state) 
 {
+    rizz_api_gfx_draw* api = &the_gfx->staged;
     sg_pass_action pass_action = { .colors[0] = { SG_ACTION_CLEAR, { 0.0f, 0.0f, 0.0f, 1.0f } },
                                    .depth = { SG_ACTION_CLEAR, 1.0f } };
 
-    the_gfx->staged.begin(g_stage);
-    the_gfx->staged.begin_default_pass(&pass_action, the_app->width(), the_app->height());
+    api->begin(the_game.render_stages[RENDER_STAGE_GAME]);
+    api->begin_default_pass(&pass_action, the_app->width(), the_app->height());
+
+    float w = (float)the_app->width();
+    float h = (float)the_app->height();
+
+    const rizz_font* font = the_font->font_get(the_game.font);
+    sx_mat4 vp =
+        sx_mat4_ortho_offcenter(0, h, w, 0, -5.0f, 5.0f, 0, the_gfx->GL_family());
+    the_font->set_viewproj_mat(font, &vp);
+    char text[32];
+    if (state == GAME_STATE_GAMEOVER) {
+        sx_strcpy(text, sizeof(text), "GAME OVER");
+    } else {
+        sx_snprintf(text, sizeof(text), "STAGE  %d", the_game.stage + 1);
+    }
+
+    rizz_font_bounds bounds = the_font->bounds(font, SX_VEC2_ZERO, text);
+    sx_vec2 text_pos = sx_vec2f(w * 0.5f - sx_rect_width(bounds.rect) * 0.5f,
+                                h * 0.5f + sx_rect_height(bounds.rect));
+    the_font->draw(font, text_pos, text);
+
+    char highscore_text[32];
+    sx_snprintf(highscore_text, sizeof(highscore_text), "HIGH SCORE  %d", the_game.high_score);
+    bounds = the_font->bounds(font, SX_VEC2_ZERO, highscore_text);
+    the_font->draw(font,
+                   sx_vec2f(w*0.5f - sx_rect_width(bounds.rect) * 0.5f, text_pos.y - 30.0f),
+                   highscore_text);
+
+    api->end_pass();
+    api->end();    // RENDER_STAGE_GAME
+}
+
+static void render(void)
+{
+    if (the_game.state != GAME_STATE_INGAME) {
+        render_info_screen(the_game.state);
+        return;
+    }
+
+    rizz_api_gfx_draw* api = &the_gfx->staged;
+    sg_pass_action pass_action = { .colors[0] = { SG_ACTION_CLEAR, { 0.0f, 0.0f, 0.0f, 1.0f } },
+                                   .depth = { SG_ACTION_CLEAR, 1.0f } };
+
+    api->begin(the_game.render_stages[RENDER_STAGE_GAME]);
+    api->begin_default_pass(&pass_action, the_app->width(), the_app->height());
 
     sx_mat4 proj = the_camera->ortho_mat(&the_game.cam);
     sx_mat4 view = the_camera->view_mat(&the_game.cam);
@@ -902,9 +1246,35 @@ static void render()
         }
     }
 
-    the_gfx->staged.end_pass();
-    the_gfx->staged.end();
+    // saucer
+    if (!the_game.saucer.dead) {
+        sx_mat3 mat = sx_mat3_translatev(the_game.saucer.pos);
+        the_sprite->draw(the_game.saucer.sprite, &vp, &mat, SX_COLOR_WHITE);
+    }
 
+    api->end_pass();
+    api->end(); // RENDER_STAGE_GAME
+
+    api->begin(the_game.render_stages[RENDER_STAGE_UI]);
+    {
+        int w = the_app->width();
+        int h = the_app->height();
+        api->begin_default_pass(&(sg_pass_action) {
+            .colors[0] = { SG_ACTION_DONTCARE }, .depth = {SG_ACTION_DONTCARE}}, w, h);
+
+        const rizz_font* font = the_font->font_get(the_game.font);
+        sx_mat4 vp = sx_mat4_ortho_offcenter(0, (float)h, (float)w, 0, -5.0f, 5.0f, 0, the_gfx->GL_family());
+        the_font->set_viewproj_mat(font, &vp);
+        the_font->drawf(font, sx_vec2f(10.0f, 30.0f), "SCORE  %d", the_game.player_score);
+        the_font->drawf(font, sx_vec2f((float)(w - 100), 30.0f), "LIVES  %d",
+                                        the_game.player_lives);
+
+        api->end_pass();
+    }
+    api->end(); // RENDER_STAGE_UI
+
+
+    #if 0
     // Use imgui UI
     if (the_imgui) {
         the_imgui->SetNextWindowContentSize(sx_vec2f(100.0f, 50.0f));
@@ -912,11 +1282,14 @@ static void render()
             the_imgui->LabelText("Fps", "%.3f", the_core->fps());
         }
         the_sprite->show_debugger(NULL);
+        the_sound->show_debugger(NULL);
+        the_input->show_debugger(NULL);
         the_imgui->End();
     }
+    #endif
 }
 
-rizz_plugin_decl_main(pacman, plugin, e)
+rizz_plugin_decl_main(space_invaders, plugin, e)
 {
     switch (e) {
     case RIZZ_PLUGIN_EVENT_STEP:
@@ -935,7 +1308,8 @@ rizz_plugin_decl_main(pacman, plugin, e)
         the_imgui = plugin->api->get_api_byname("imgui", 0);
         the_sprite = plugin->api->get_api_byname("sprite", 0);
         the_input = plugin->api->get_api_byname("input", 0);
-
+        the_sound = plugin->api->get_api_byname("sound", 0);
+        the_font = plugin->api->get_api_byname("font", 0);
         the_plugin = plugin->api;
         init();
         break;
@@ -954,13 +1328,15 @@ rizz_plugin_decl_main(pacman, plugin, e)
     return 0;
 }
 
-rizz_plugin_decl_event_handler(pacman, e)
+rizz_plugin_decl_event_handler(space_invaders, e)
 {
     switch (e->type) {
     case RIZZ_APP_EVENTTYPE_UPDATE_APIS:
         the_imgui = the_plugin->get_api_byname("imgui", 0);
         the_sprite = the_plugin->get_api_byname("sprite", 0);
         the_input = the_plugin->get_api_byname("input", 0);
+        the_sound = the_plugin->get_api_byname("sound", 0);
+        the_font = the_plugin->get_api_byname("font", 0);
         break;
 
     default:
@@ -970,6 +1346,11 @@ rizz_plugin_decl_event_handler(pacman, e)
 
 rizz_game_decl_config(conf)
 {
+    // set plugin directory to the exe folder
+    static char exe_path[RIZZ_MAX_PATH];
+    sx_os_path_exepath(exe_path, sizeof(exe_path));
+    sx_os_path_dirname(exe_path, sizeof(exe_path), exe_path);
+
     conf->app_name = "space-invaders";
     conf->app_version = 1000;
     conf->app_title = "space-invaders";
@@ -978,7 +1359,9 @@ rizz_game_decl_config(conf)
     conf->core_flags |= RIZZ_CORE_FLAG_VERBOSE;
     conf->multisample_count = 4;
     conf->swap_interval = 1;
+    conf->plugin_path = exe_path;
     conf->plugins[0] = "imgui";
     conf->plugins[1] = "2dtools";
     conf->plugins[2] = "input";
+    conf->plugins[3] = "sound";
 }
