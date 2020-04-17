@@ -10,6 +10,7 @@ It demonstrates how to make a simple game with _rizz_ and shows multiple feature
 - Coroutines (scene transitions)
 - Job Dispatcher (used for collision detection, which is silly in this case of course!)
 - Fonts and text
+- Shows Memory tracing and other debugger panels
 
 ![space-invaders](art/space-invaders.gif)
 
