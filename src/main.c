@@ -19,8 +19,8 @@ RIZZ_STATE static rizz_api_core* the_core;
 RIZZ_STATE static rizz_api_gfx* the_gfx;
 RIZZ_STATE static rizz_api_app* the_app;
 RIZZ_STATE static rizz_api_imgui* the_imgui;
-RIZZ_STATE static rizz_api_asset* the_asset;
 RIZZ_STATE static rizz_api_imgui_extra* the_imguix;
+RIZZ_STATE static rizz_api_asset* the_asset;
 RIZZ_STATE static rizz_api_camera* the_camera;
 RIZZ_STATE static rizz_api_vfs* the_vfs;
 RIZZ_STATE static rizz_api_sprite* the_sprite;
@@ -153,17 +153,25 @@ typedef struct collision_data_t {
     int hit_index;
 } collision_data_t;
 
+typedef enum debugger_t {
+    DEBUGGER_MEMORY = 0,
+    DEBUGGER_SPRITES,
+    DEBUGGER_SOUND,
+    DEBUGGER_INPUT,
+    DEBUGGER_COUNT
+} debugger_t;
+
 typedef struct game_t {
+    const sx_alloc* alloc;
     enemy_t enemies[MAX_ENEMIES];
     enemy_t dummy_enemy;
     cover_t covers[NUM_COVERS];
     rizz_sprite bullet_sprites[BULLET_TYPE_COUNT];
-    rizz_sprite_animclip enemy_idle_clips[MAX_ENEMIES];
     rizz_sprite enemy_sprites[MAX_ENEMIES];
+    rizz_sprite_animclip enemy_clips[MAX_ENEMIES];
     rizz_sprite enemy_explosion_sprite;
     rizz_sprite bounds_explosion_sprite;
     rizz_sprite cover_sprite;
-    rizz_sprite_animclip enemy_clips[MAX_ENEMIES];
     rizz_asset sounds[SOUND_COUNT];
     bullet_t bullets[MAX_BULLETS];
     saucer_t saucer;
@@ -194,6 +202,8 @@ typedef struct game_t {
     game_state_t state;
     int stage;
     int high_score;
+    bool show_dev_menu;
+    bool show_debuggers[DEBUGGER_COUNT];
 } game_t;
 
 RIZZ_STATE static game_t the_game;
@@ -385,7 +395,8 @@ static void create_enemies()
         the_game.enemy_clips[i] = the_sprite->animclip_create(
             &(rizz_sprite_animclip_desc){ .atlas = the_game.game_atlas,
                                           .frames = frame_descs[enemy],
-                                          .fps = the_core->randf() * 0.1f + 0.8f });
+                                          .fps = the_core->randf() * 0.1f + 0.8f,
+                                          .alloc = the_game.alloc });
 
         the_game.enemy_sprites[i] =
             the_sprite->create(&(rizz_sprite_desc){ .name = enemy_names[enemy],
@@ -551,6 +562,8 @@ static void create_covers(void)
 
 static bool init()
 {
+    the_game.alloc = the_core->alloc(RIZZ_MEMID_GAME);
+
     the_game.render_stages[RENDER_STAGE_GAME] =
         the_gfx->stage_register("game", (rizz_gfx_stage){ .id = 0 });
     the_game.render_stages[RENDER_STAGE_UI] =
@@ -589,9 +602,9 @@ static bool init()
         the_asset->load("atlas", "/assets/sprites/game-sprites",
                         &(rizz_atlas_load_params){ .min_filter = SG_FILTER_NEAREST,
                                                    .mag_filter = SG_FILTER_NEAREST },
-                        0, NULL, 0);
+                        0, the_game.alloc, 0);
     the_game.font = the_asset->load("font", "/assets/fonts/5x5_pixel.ttf",
-                                    &(rizz_font_load_params){ 0 }, 0, NULL, 0);
+                                    &(rizz_font_load_params){ 0 }, 0, the_game.alloc, 0);
 
     // TODO: creating sprites should be easier (from data)
     //
@@ -612,7 +625,7 @@ static bool init()
     the_sound->bus_set_max_lanes(0, 4);
     the_sound->bus_set_max_lanes(1, 1);
 
-    the_sound->set_master_volume(0.1f);
+    the_sound->set_master_volume(1.0f);
 
     // load high score
     load_high_score();
@@ -620,7 +633,28 @@ static bool init()
     return true;
 }
 
-static void shutdown() {}
+static void shutdown() 
+{
+    the_asset->unload(the_game.game_atlas);
+    the_asset->unload(the_game.font);
+    for (int i = 0; i < SOUND_COUNT; i++) {
+        the_asset->unload(the_game.sounds[i]);
+    }
+    for (int i = 0; i < MAX_ENEMIES; i++) {
+        the_sprite->animclip_destroy(the_game.enemy_clips[i]);
+        the_sprite->destroy(the_game.enemy_sprites[i]);
+    }
+
+    for (int i = 0; i < BULLET_TYPE_COUNT; i++) {
+        the_sprite->destroy(the_game.bullet_sprites[i]);
+    }
+
+    the_sprite->destroy(the_game.enemy_explosion_sprite);
+    the_sprite->destroy(the_game.bounds_explosion_sprite);
+    the_sprite->destroy(the_game.cover_sprite);
+    the_sprite->destroy(the_game.player.sprite);
+    the_sprite->destroy(the_game.saucer.sprite);
+}
 
 static void update_enemy(enemy_t* e, float dt)
 {
@@ -1150,8 +1184,58 @@ static void render_info_screen(game_state_t state)
     api->end();    // RENDER_STAGE_GAME
 }
 
+static void show_devmenu(void)
+{
+    bool* debug_mem = &the_game.show_debuggers[DEBUGGER_MEMORY];
+    bool* debug_sprites = &the_game.show_debuggers[DEBUGGER_SPRITES];
+    bool* debug_sounds = &the_game.show_debuggers[DEBUGGER_SOUND];
+    bool* debug_input = &the_game.show_debuggers[DEBUGGER_INPUT];
+    if (the_imgui->BeginMainMenuBar())
+    {
+        if (the_imgui->BeginMenu("Debug", true)) {
+            if (the_imgui->MenuItemBool("Memory", NULL, *debug_mem, true)) {
+                *debug_mem = !(*debug_mem);
+            }
+
+            if (the_imgui->MenuItemBool("Sprites", NULL, *debug_sprites, true)) {
+                *debug_sprites = !(*debug_sprites);
+            }
+
+            if (the_imgui->MenuItemBool("Sounds", NULL, *debug_sounds, true)) {
+                *debug_sounds = !(*debug_sounds);
+            }
+
+            if (the_imgui->MenuItemBool("Input", NULL, *debug_input, true)) {
+                *debug_input = !(*debug_input);
+            }
+            the_imgui->EndMenu();
+
+        }
+     }
+    the_imgui->EndMainMenuBar();
+
+    if (*debug_mem) {
+        rizz_mem_info meminfo;
+        the_core->get_mem_info(&meminfo);
+        the_imguix->memory_debugger(&meminfo, debug_mem);
+    }
+    if (*debug_sprites) {
+        the_sprite->show_debugger(debug_sprites);
+    }
+    if (*debug_sounds) {
+        the_sound->show_debugger(debug_sounds);
+    }
+    if (*debug_input) {
+        the_input->show_debugger(debug_input);
+    }
+}
+
 static void render(void)
 {
+    if (the_game.show_dev_menu) {
+        show_devmenu();
+    }
+
     if (the_game.state != GAME_STATE_INGAME) {
         render_info_screen(the_game.state);
         return;
@@ -1273,7 +1357,6 @@ static void render(void)
     }
     api->end(); // RENDER_STAGE_UI
 
-
     #if 0
     // Use imgui UI
     if (the_imgui) {
@@ -1306,6 +1389,7 @@ rizz_plugin_decl_main(space_invaders, plugin, e)
         the_vfs = plugin->api->get_api(RIZZ_API_VFS, 0);
         the_asset = plugin->api->get_api(RIZZ_API_ASSET, 0);
         the_imgui = plugin->api->get_api_byname("imgui", 0);
+        the_imguix = plugin->api->get_api_byname("imgui_extra", 0);
         the_sprite = plugin->api->get_api_byname("sprite", 0);
         the_input = plugin->api->get_api_byname("input", 0);
         the_sound = plugin->api->get_api_byname("sound", 0);
@@ -1332,12 +1416,19 @@ rizz_plugin_decl_event_handler(space_invaders, e)
 {
     switch (e->type) {
     case RIZZ_APP_EVENTTYPE_UPDATE_APIS:
+        // reload APIs. This event happens when one of the plugins are reloaded
         the_imgui = the_plugin->get_api_byname("imgui", 0);
+        the_imguix = the_plugin->get_api_byname("imgui_extra", 0);
         the_sprite = the_plugin->get_api_byname("sprite", 0);
         the_input = the_plugin->get_api_byname("input", 0);
         the_sound = the_plugin->get_api_byname("sound", 0);
         the_font = the_plugin->get_api_byname("font", 0);
         break;
+
+    case RIZZ_APP_EVENTTYPE_KEY_DOWN:
+        if (e->key_code == RIZZ_APP_KEYCODE_F2) {
+            the_game.show_dev_menu = !the_game.show_dev_menu;
+        }
 
     default:
         break;
