@@ -4,6 +4,15 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "(MacOS) Launch",
+            "program": "bin/rizz",
+            "args": ["--run", "bin/libspace-invaders.dylib"],
+            "cwd": "${workspaceFolder}/../"
+        },
         {
             "name": "(Windows) Launch",
             "type": "cppvsdbg",

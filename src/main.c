@@ -19,7 +19,6 @@ RIZZ_STATE static rizz_api_core* the_core;
 RIZZ_STATE static rizz_api_gfx* the_gfx;
 RIZZ_STATE static rizz_api_app* the_app;
 RIZZ_STATE static rizz_api_imgui* the_imgui;
-RIZZ_STATE static rizz_api_imgui_extra* the_imguix;
 RIZZ_STATE static rizz_api_asset* the_asset;
 RIZZ_STATE static rizz_api_camera* the_camera;
 RIZZ_STATE static rizz_api_vfs* the_vfs;
@@ -155,6 +154,7 @@ typedef struct collision_data_t {
 
 typedef enum debugger_t {
     DEBUGGER_MEMORY = 0,
+    DEBUGGER_GRAPHICS,
     DEBUGGER_SPRITES,
     DEBUGGER_SOUND,
     DEBUGGER_INPUT,
@@ -233,27 +233,28 @@ static void create_sounds(void)
 
 static void save_high_score(void) 
 {
-    sx_file_writer writer;
-    if (sx_file_open_writer(&writer, "highscore.dat", 0)) {
+    sx_file f;
+    if (sx_file_open(&f, "highscore.dat", SX_FILE_WRITE)) {
         uint32_t sign = SCORE_FOURCC;
-        sx_file_write(&writer, &sign, sizeof(sign));
-        sx_file_write(&writer, &the_game.high_score, sizeof(the_game.high_score));
-        sx_file_close_writer(&writer);
+        sx_file_write(&f, &sign, sizeof(sign));
+        sx_file_write(&f, &the_game.high_score, sizeof(the_game.high_score));
+        sx_file_close(&f);
     }
 }
 
 static void load_high_score(void)
 {
-    sx_file_reader reader;
-    if (sx_file_open_reader(&reader, "highscore.dat")) {
+    sx_file f;
+    if (sx_file_open(&f, "highscore.dat", SX_FILE_READ)) {
         uint32_t sign;
-        sx_file_read(&reader, &sign, sizeof(sign));
-        if (sign != SCORE_FOURCC) {
-            sx_file_read(&reader, &the_game.high_score, sizeof(the_game.high_score));
+        sx_file_read(&f, &sign, sizeof(sign));
+        if (sign == SCORE_FOURCC) {
+            sx_file_read(&f, &the_game.high_score, sizeof(the_game.high_score));
         }
-        sx_file_close_reader(&reader);
+        sx_file_close(&f);
     }
 }
+
 
 
 static void refresh_game(void)
@@ -627,7 +628,6 @@ static bool init()
 
     the_sound->set_master_volume(1.0f);
 
-    // load high score
     load_high_score();
 
     return true;
@@ -1187,6 +1187,7 @@ static void render_info_screen(game_state_t state)
 static void show_devmenu(void)
 {
     bool* debug_mem = &the_game.show_debuggers[DEBUGGER_MEMORY];
+    bool* debug_gfx = &the_game.show_debuggers[DEBUGGER_GRAPHICS];
     bool* debug_sprites = &the_game.show_debuggers[DEBUGGER_SPRITES];
     bool* debug_sounds = &the_game.show_debuggers[DEBUGGER_SOUND];
     bool* debug_input = &the_game.show_debuggers[DEBUGGER_INPUT];
@@ -1195,6 +1196,10 @@ static void show_devmenu(void)
         if (the_imgui->BeginMenu("Debug", true)) {
             if (the_imgui->MenuItemBool("Memory", NULL, *debug_mem, true)) {
                 *debug_mem = !(*debug_mem);
+            }
+
+            if (the_imgui->MenuItemBool("Graphics", NULL, *debug_gfx, true)) {
+                *debug_gfx = !(*debug_gfx);
             }
 
             if (the_imgui->MenuItemBool("Sprites", NULL, *debug_sprites, true)) {
@@ -1215,9 +1220,10 @@ static void show_devmenu(void)
     the_imgui->EndMainMenuBar();
 
     if (*debug_mem) {
-        rizz_mem_info meminfo;
-        the_core->get_mem_info(&meminfo);
-        the_imguix->memory_debugger(&meminfo, debug_mem);
+        the_core->show_memory_debugger(debug_mem);
+    }
+    if (*debug_gfx) {
+        the_core->show_graphics_debugger(debug_gfx);
     }
     if (*debug_sprites) {
         the_sprite->show_debugger(debug_sprites);
@@ -1234,7 +1240,7 @@ static void render(void)
 {
     if (the_game.show_dev_menu) {
         show_devmenu();
-    }
+    }    
 
     if (the_game.state != GAME_STATE_INGAME) {
         render_info_screen(the_game.state);
@@ -1338,7 +1344,7 @@ static void render(void)
 
     api->end_pass();
     api->end(); // RENDER_STAGE_GAME
-
+    
     api->begin(the_game.render_stages[RENDER_STAGE_UI]);
     {
         int w = the_app->width();
@@ -1356,20 +1362,6 @@ static void render(void)
         api->end_pass();
     }
     api->end(); // RENDER_STAGE_UI
-
-    #if 0
-    // Use imgui UI
-    if (the_imgui) {
-        the_imgui->SetNextWindowContentSize(sx_vec2f(100.0f, 50.0f));
-        if (the_imgui->Begin("space-invaders", NULL, 0)) {
-            the_imgui->LabelText("Fps", "%.3f", the_core->fps());
-        }
-        the_sprite->show_debugger(NULL);
-        the_sound->show_debugger(NULL);
-        the_input->show_debugger(NULL);
-        the_imgui->End();
-    }
-    #endif
 }
 
 rizz_plugin_decl_main(space_invaders, plugin, e)
@@ -1389,7 +1381,6 @@ rizz_plugin_decl_main(space_invaders, plugin, e)
         the_vfs = plugin->api->get_api(RIZZ_API_VFS, 0);
         the_asset = plugin->api->get_api(RIZZ_API_ASSET, 0);
         the_imgui = plugin->api->get_api_byname("imgui", 0);
-        the_imguix = plugin->api->get_api_byname("imgui_extra", 0);
         the_sprite = plugin->api->get_api_byname("sprite", 0);
         the_input = plugin->api->get_api_byname("input", 0);
         the_sound = plugin->api->get_api_byname("sound", 0);
@@ -1418,7 +1409,6 @@ rizz_plugin_decl_event_handler(space_invaders, e)
     case RIZZ_APP_EVENTTYPE_UPDATE_APIS:
         // reload APIs. This event happens when one of the plugins are reloaded
         the_imgui = the_plugin->get_api_byname("imgui", 0);
-        the_imguix = the_plugin->get_api_byname("imgui_extra", 0);
         the_sprite = the_plugin->get_api_byname("sprite", 0);
         the_input = the_plugin->get_api_byname("input", 0);
         the_sound = the_plugin->get_api_byname("sound", 0);
@@ -1448,7 +1438,7 @@ rizz_game_decl_config(conf)
     conf->window_width = 600;
     conf->window_height = 800;
     conf->core_flags |= RIZZ_CORE_FLAG_VERBOSE;
-    conf->multisample_count = 4;
+    conf->multisample_count = 1;
     conf->swap_interval = 1;
     conf->plugin_path = exe_path;
     conf->plugins[0] = "imgui";
