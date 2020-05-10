@@ -154,6 +154,7 @@ typedef struct collision_data_t {
 
 typedef enum debugger_t {
     DEBUGGER_MEMORY = 0,
+    DEBUGGER_LOG,
     DEBUGGER_GRAPHICS,
     DEBUGGER_SPRITES,
     DEBUGGER_SOUND,
@@ -1019,6 +1020,8 @@ static void update(float dt)
         return;
     }
 
+    rizz_profile_begin(UPDATE, 0);
+
     float dtp = dt;
     float dte;
 
@@ -1097,7 +1100,6 @@ static void update(float dt)
         }
     }
 
-
     update_bullets(dt);
 
     if (the_game.enemy_explosion) {
@@ -1143,6 +1145,8 @@ static void update(float dt)
         the_sound->play(the_sound->source_get(the_game.sounds[SOUND_HEARTBEAT]), 1, 1.0f, 0, false);
         the_game.heartbeat_tm = 0;
     }
+
+    rizz_profile_end(UPDATE);
 }
 
 static void render_info_screen(game_state_t state) 
@@ -1187,6 +1191,7 @@ static void render_info_screen(game_state_t state)
 static void show_devmenu(void)
 {
     bool* debug_mem = &the_game.show_debuggers[DEBUGGER_MEMORY];
+    bool* show_log = &the_game.show_debuggers[DEBUGGER_LOG];
     bool* debug_gfx = &the_game.show_debuggers[DEBUGGER_GRAPHICS];
     bool* debug_sprites = &the_game.show_debuggers[DEBUGGER_SPRITES];
     bool* debug_sounds = &the_game.show_debuggers[DEBUGGER_SOUND];
@@ -1196,6 +1201,10 @@ static void show_devmenu(void)
         if (the_imgui->BeginMenu("Debug", true)) {
             if (the_imgui->MenuItemBool("Memory", NULL, *debug_mem, true)) {
                 *debug_mem = !(*debug_mem);
+            }
+
+            if (the_imgui->MenuItemBool("Log", NULL, *show_log, true)) {
+                *show_log = !(*show_log);
             }
 
             if (the_imgui->MenuItemBool("Graphics", NULL, *debug_gfx, true)) {
@@ -1222,6 +1231,9 @@ static void show_devmenu(void)
     if (*debug_mem) {
         the_core->show_memory_debugger(debug_mem);
     }
+    if (*show_log) {
+        the_core->show_log(show_log);
+    }
     if (*debug_gfx) {
         the_core->show_graphics_debugger(debug_gfx);
     }
@@ -1246,6 +1258,8 @@ static void render(void)
         render_info_screen(the_game.state);
         return;
     }
+
+    rizz_profile_begin(RENDER, 0);
 
     rizz_api_gfx_draw* api = &the_gfx->staged;
     sg_pass_action pass_action = { .colors[0] = { SG_ACTION_CLEAR, { 0.0f, 0.0f, 0.0f, 1.0f } },
@@ -1358,20 +1372,23 @@ static void render(void)
         the_font->drawf(font, sx_vec2f(10.0f, 30.0f), "SCORE  %d", the_game.player_score);
         the_font->drawf(font, sx_vec2f((float)(w - 100), 30.0f), "LIVES  %d",
                                         the_game.player_lives);
+        the_font->drawf(font, sx_vec2f(w/2, 30.0f), "FPS  %.0f", the_core->fps_mean());
 
         api->end_pass();
     }
     api->end(); // RENDER_STAGE_UI
+
+    rizz_profile_end(RENDER);
 }
 
 rizz_plugin_decl_main(space_invaders, plugin, e)
 {
     switch (e) {
-    case RIZZ_PLUGIN_EVENT_STEP:
+    case RIZZ_PLUGIN_EVENT_STEP: {
         update((float)sx_tm_sec(the_core->delta_tick()));
         render();
         break;
-
+    }
     case RIZZ_PLUGIN_EVENT_INIT:
         // runs only once for application. Retreive needed APIs
         the_core = plugin->api->get_api(RIZZ_API_CORE, 0);
@@ -1437,7 +1454,8 @@ rizz_game_decl_config(conf)
     conf->app_title = "space-invaders";
     conf->window_width = 600;
     conf->window_height = 800;
-    conf->core_flags |= RIZZ_CORE_FLAG_VERBOSE;
+    conf->core_flags |= RIZZ_CORE_FLAG_PROFILE_GPU;
+    conf->log_level = RIZZ_LOG_LEVEL_DEBUG;
     conf->multisample_count = 1;
     conf->swap_interval = 1;
     conf->plugin_path = exe_path;

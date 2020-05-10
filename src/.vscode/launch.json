@@ -18,9 +18,9 @@
             "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/../bin/rizz.exe",
-            "args": ["--run", "space-invaders.dll"],
+            "args": ["--run", "bin/space-invaders.dll"],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/../bin",
+            "cwd": "${workspaceFolder}/../",
             "environment": [],
             "externalConsole": false
         }
