@@ -256,8 +256,6 @@ static void load_high_score(void)
     }
 }
 
-
-
 static void refresh_game(void)
 {
     float tile_size = the_game.tile_size;
@@ -441,7 +439,7 @@ static void create_player()
     player_t* player = &the_game.player;
     player->sprite = the_sprite->create(&(rizz_sprite_desc){ .name = "player.png",
                                                              .atlas = the_game.game_atlas,
-                                                             .size = the_game.tile_size,
+                                                             .size = {{the_game.tile_size, 0}},
                                                              .color = sx_colorn(0xffffffff) });
     player->pos = sx_vec2f(0, -GAME_BOARD_HEIGHT * 0.5f + the_game.tile_size * 2.0f);
     player->speed = 0.1f;
@@ -627,7 +625,7 @@ static bool init()
     the_sound->bus_set_max_lanes(0, 4);
     the_sound->bus_set_max_lanes(1, 1);
 
-    the_sound->set_master_volume(1.0f);
+    // the_sound->set_master_volume(0.0f);
 
     load_high_score();
 
@@ -1370,10 +1368,11 @@ static void render(void)
         sx_mat4 vp = sx_mat4_ortho_offcenter(0, (float)h, (float)w, 0, -5.0f, 5.0f, 0, the_gfx->GL_family());
         the_font->set_viewproj_mat(font, &vp);
         the_font->drawf(font, sx_vec2f(10.0f, 30.0f), "SCORE  %d", the_game.player_score);
-        the_font->drawf(font, sx_vec2f((float)(w - 100), 30.0f), "LIVES  %d",
-                                        the_game.player_lives);
-        the_font->drawf(font, sx_vec2f(w/2, 30.0f), "FPS  %.0f", the_core->fps_mean());
 
+        char lives[32];
+        sx_snprintf(lives, sizeof(lives), "LIVES  %d", the_game.player_lives);
+        rizz_font_bounds bounds = the_font->bounds(font, SX_VEC2_ZERO, lives);
+        the_font->drawf(font, sx_vec2f((float)(w - sx_rect_width(bounds.rect)*1.1f), 30.0f), lives);
         api->end_pass();
     }
     api->end(); // RENDER_STAGE_UI
@@ -1454,9 +1453,9 @@ rizz_game_decl_config(conf)
     conf->app_title = "space-invaders";
     conf->window_width = 600;
     conf->window_height = 800;
+    conf->app_flags |= RIZZ_APP_FLAG_HIGHDPI;
     conf->core_flags |= RIZZ_CORE_FLAG_PROFILE_GPU;
     conf->log_level = RIZZ_LOG_LEVEL_DEBUG;
-    conf->multisample_count = 1;
     conf->swap_interval = 1;
     conf->plugin_path = exe_path;
     conf->plugins[0] = "imgui";
