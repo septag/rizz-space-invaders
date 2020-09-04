@@ -1,9 +1,11 @@
 #include "sx/allocator.h"
 #include "sx/bitarray.h"
+#include "sx/macros.h"
 #include "sx/math.h"
 #include "sx/string.h"
 #include "sx/timer.h"
 #include "sx/os.h"
+#include "sx/rng.h"
 
 #include "rizz/2dtools.h"
 #include "rizz/imgui-extra.h"
@@ -13,7 +15,11 @@
 #include "rizz/sound.h"
 
 #define CUTE_C2_IMPLEMENTATION
+SX_PRAGMA_DIAGNOSTIC_PUSH()
+SX_PRAGMA_DIAGNOSTIC_IGNORED_CLANG("-Wswitch")
+SX_PRAGMA_DIAGNOSTIC_IGNORED_CLANG("-Wunused-function")
 #include "cute_c2.h"
+SX_PRAGMA_DIAGNOSTIC_POP()
 
 RIZZ_STATE static rizz_api_core* the_core;
 RIZZ_STATE static rizz_api_gfx* the_gfx;
@@ -164,6 +170,7 @@ typedef enum debugger_t {
 
 typedef struct game_t {
     const sx_alloc* alloc;
+    sx_rng rng;
     enemy_t enemies[MAX_ENEMIES];
     enemy_t dummy_enemy;
     cover_t covers[NUM_COVERS];
@@ -395,7 +402,7 @@ static void create_enemies()
         the_game.enemy_clips[i] = the_sprite->animclip_create(
             &(rizz_sprite_animclip_desc){ .atlas = the_game.game_atlas,
                                           .frames = frame_descs[enemy],
-                                          .fps = the_core->randf() * 0.1f + 0.8f,
+                                          .fps = sx_rng_genf(&the_game.rng) * 0.1f + 0.8f,
                                           .alloc = the_game.alloc });
 
         the_game.enemy_sprites[i] =
@@ -528,7 +535,7 @@ static void create_saucer(void)
                                                 .size = sx_vec2f(the_game.tile_size, 0) });
     the_game.saucer = (saucer_t){ .dead = true,
                                   .sprite = sprite,
-                                  .wait_duration = 30.0f + (the_core->randf() * 20.0f - 10.0f),
+                                  .wait_duration = 30.0f + (sx_rng_genf(&the_game.rng) * 20.0f - 10.0f),
                                   .hit_score = 100 };
 }
 
@@ -563,6 +570,8 @@ static void create_covers(void)
 static bool init()
 {
     the_game.alloc = the_core->alloc(RIZZ_MEMID_GAME);
+
+    sx_rng_seed_time(&the_game.rng);
 
     the_game.render_stages[RENDER_STAGE_GAME] =
         the_gfx->stage_register("game", (rizz_gfx_stage){ .id = 0 });
@@ -711,7 +720,7 @@ static void update_enemy(enemy_t* e, float dt)
 
 static void spawn_saucer(void)
 {
-    float side = sx_sign(the_core->randf() * 2.0f - 1.0f);
+    float side = sx_sign(sx_rng_genf(&the_game.rng) * 2.0f - 1.0f);
     if (side == 0) {
         side = 1.0f;
     }
@@ -720,7 +729,7 @@ static void spawn_saucer(void)
     saucer->pos.x = side * (GAME_BOARD_WIDTH * 0.5f + the_game.tile_size);
     saucer->pos.y = GAME_BOARD_HEIGHT * 0.5f - the_game.tile_size;
     saucer->speed = -side * 0.3f;
-    saucer->wait_duration = 30.0f + (the_core->randf() * 20.0f - 10.0f);
+    saucer->wait_duration = 30.0f + (sx_rng_genf(&the_game.rng) * 20.0f - 10.0f);
     saucer->dead = false;
 
     the_sound->play(the_sound->source_get(the_game.sounds[SOUND_SAUCER]), 0, 1.0f, 0, false);
@@ -1066,11 +1075,11 @@ static void update(float dt)
 
         // enemy shoot
         if (the_game.enemy_shoot_tm >= the_game.enemy_shoot_interval && num_alive > 0) {
-            int alive_index = the_core->rand_range(0, num_alive - 1);
+            int alive_index = sx_rng_gen_rangei(&the_game.rng, 0, num_alive - 1);
             create_bullet(the_game.enemies[alive_enemies[alive_index]].pos, BULLET_TYPE_ALIEN1);
             the_game.enemy_shoot_tm = 0;
             the_game.enemy_shoot_interval =
-                ENEMY_SHOOT_INTERVAL + (the_core->randf() * 2.0f - 1.0f) * 0.2f;
+                ENEMY_SHOOT_INTERVAL + (sx_rng_genf(&the_game.rng) * 2.0f - 1.0f) * 0.2f;
         }
         the_game.enemy_shoot_tm += dte / speed;
 
