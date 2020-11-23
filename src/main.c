@@ -585,7 +585,8 @@ static bool init()
     // camera
     // projection: setup for ortho, total-width = GAME_BOARD_WIDTH
     // view: Y-UP
-    sx_vec2 screen_size = the_app->sizef();
+    sx_vec2 screen_size;
+    the_app->window_size(&screen_size);
     const float view_width = GAME_BOARD_WIDTH * 0.5f;
     const float view_height = screen_size.y * view_width / screen_size.x;
     the_camera->init(&the_game.cam, 50.0f,
@@ -1275,8 +1276,9 @@ static void render(void)
     api->begin(the_game.render_stages[RENDER_STAGE_GAME]);
     api->begin_default_pass(&pass_action, the_app->width(), the_app->height());
 
-    sx_mat4 proj = the_camera->ortho_mat(&the_game.cam);
-    sx_mat4 view = the_camera->view_mat(&the_game.cam);
+    sx_mat4 proj, view;
+    the_camera->ortho_mat(&the_game.cam, &proj);
+    the_camera->view_mat(&the_game.cam, &view);
     sx_mat4 vp = sx_mat4_mul(&proj, &view);
 
     sx_mat3 enemy_mats[MAX_ENEMIES];
