@@ -28,12 +28,11 @@ RIZZ_STATE static rizz_api_imgui* the_imgui;
 RIZZ_STATE static rizz_api_asset* the_asset;
 RIZZ_STATE static rizz_api_camera* the_camera;
 RIZZ_STATE static rizz_api_vfs* the_vfs;
-RIZZ_STATE static rizz_api_sprite* the_sprite;
+RIZZ_STATE static rizz_api_2d* the_2d;
 RIZZ_STATE static rizz_api_plugin* the_plugin;
 RIZZ_STATE static rizz_api_camera* the_camera;
 RIZZ_STATE static rizz_api_input* the_input;
 RIZZ_STATE static rizz_api_snd* the_sound;
-RIZZ_STATE static rizz_api_font* the_font;
 
 #define ENEMIES_PER_ROW 11
 #define NUM_ROWS 5
@@ -399,14 +398,14 @@ static void create_enemies()
 
         int enemy = layout[i];
 
-        the_game.enemy_clips[i] = the_sprite->animclip_create(
+        the_game.enemy_clips[i] = the_2d->sprite.animclip_create(
             &(rizz_sprite_animclip_desc){ .atlas = the_game.game_atlas,
                                           .frames = frame_descs[enemy],
                                           .fps = sx_rng_genf(&the_game.rng) * 0.1f + 0.8f,
                                           .alloc = the_game.alloc });
 
         the_game.enemy_sprites[i] =
-            the_sprite->create(&(rizz_sprite_desc){ .name = enemy_names[enemy],
+            the_2d->sprite.create(&(rizz_sprite_desc){ .name = enemy_names[enemy],
                                                     .atlas = the_game.game_atlas,
                                                     .size = sx_vec2f(tile_size * 0.8f, 0),
                                                     .color = sx_colorn((0xffffffff)),
@@ -444,7 +443,7 @@ static void create_enemies()
 static void create_player()
 {
     player_t* player = &the_game.player;
-    player->sprite = the_sprite->create(&(rizz_sprite_desc){ .name = "player.png",
+    player->sprite = the_2d->sprite.create(&(rizz_sprite_desc){ .name = "player.png",
                                                              .atlas = the_game.game_atlas,
                                                              .size = {{the_game.tile_size, 0}},
                                                              .color = sx_colorn(0xffffffff) });
@@ -462,7 +461,7 @@ static void create_bullet_sprites()
     const float bullet_origins[BULLET_TYPE_COUNT] = { -0.5f, 0.5f };
     for (int i = 0; i < BULLET_TYPE_COUNT; i++) {
         the_game.bullet_sprites[i] =
-            the_sprite->create(&(rizz_sprite_desc){ .name = bullet_names[i],
+            the_2d->sprite.create(&(rizz_sprite_desc){ .name = bullet_names[i],
                                                     .atlas = the_game.game_atlas,
                                                     .size = sx_vec2f(0, bullet_sizes[i]),
                                                     .origin = sx_vec2f(0, bullet_origins[i]),
@@ -473,12 +472,12 @@ static void create_bullet_sprites()
 static void create_explosion_sprites()
 {
     the_game.enemy_explosion_sprite =
-        the_sprite->create(&(rizz_sprite_desc){ .name = "explode.png",
+        the_2d->sprite.create(&(rizz_sprite_desc){ .name = "explode.png",
                                                 .atlas = the_game.game_atlas,
                                                 .size = sx_vec2f(the_game.tile_size, 0),
                                                 .color = sx_colorn(0xffffffff) });
     the_game.bounds_explosion_sprite =
-        the_sprite->create(&(rizz_sprite_desc){ .name = "explode2.png",
+        the_2d->sprite.create(&(rizz_sprite_desc){ .name = "explode2.png",
                                                 .atlas = the_game.game_atlas,
                                                 .size = sx_vec2f(the_game.tile_size, 0),
                                                 .origin = sx_vec2f(0, -0.5f) });
@@ -530,7 +529,7 @@ static void create_explosion(sx_vec2 pos, rizz_sprite sprite)
 static void create_saucer(void)
 {
     rizz_sprite sprite =
-        the_sprite->create(&(rizz_sprite_desc){ .name = "saucer.png",
+        the_2d->sprite.create(&(rizz_sprite_desc){ .name = "saucer.png",
                                                 .atlas = the_game.game_atlas,
                                                 .size = sx_vec2f(the_game.tile_size, 0) });
     the_game.saucer = (saucer_t){ .dead = true,
@@ -561,7 +560,7 @@ static void create_covers(void)
     }
 
     the_game.cover_sprite =
-        the_sprite->create(&(rizz_sprite_desc){ .name = "cover.png",
+        the_2d->sprite.create(&(rizz_sprite_desc){ .name = "cover.png",
                                                 .atlas = the_game.game_atlas,
                                                 .size = sx_vec2f(tile_size, 0),
                                                 .origin = sx_vec2f(-0.5f, -0.5f) });
@@ -650,19 +649,19 @@ static void shutdown()
         the_asset->unload(the_game.sounds[i]);
     }
     for (int i = 0; i < MAX_ENEMIES; i++) {
-        the_sprite->animclip_destroy(the_game.enemy_clips[i]);
-        the_sprite->destroy(the_game.enemy_sprites[i]);
+        the_2d->sprite.animclip_destroy(the_game.enemy_clips[i]);
+        the_2d->sprite.destroy(the_game.enemy_sprites[i]);
     }
 
     for (int i = 0; i < BULLET_TYPE_COUNT; i++) {
-        the_sprite->destroy(the_game.bullet_sprites[i]);
+        the_2d->sprite.destroy(the_game.bullet_sprites[i]);
     }
 
-    the_sprite->destroy(the_game.enemy_explosion_sprite);
-    the_sprite->destroy(the_game.bounds_explosion_sprite);
-    the_sprite->destroy(the_game.cover_sprite);
-    the_sprite->destroy(the_game.player.sprite);
-    the_sprite->destroy(the_game.saucer.sprite);
+    the_2d->sprite.destroy(the_game.enemy_explosion_sprite);
+    the_2d->sprite.destroy(the_game.bounds_explosion_sprite);
+    the_2d->sprite.destroy(the_game.cover_sprite);
+    the_2d->sprite.destroy(the_game.player.sprite);
+    the_2d->sprite.destroy(the_game.saucer.sprite);
 }
 
 static void update_enemy(enemy_t* e, float dt)
@@ -746,7 +745,7 @@ static void update_player(float dt)
     float speed = 0.4f;
     if (the_input->get_bool(KEY_LEFT)) {
         float left_limit = -GAME_BOARD_WIDTH * 0.5f +
-                           sx_rect_width(the_sprite->draw_bounds(the_game.player.sprite)) * 0.5f +
+                           sx_rect_width(the_2d->sprite.draw_bounds(the_game.player.sprite)) * 0.5f +
                            the_game.tile_size * 0.1f;
         player->pos.x -= dt * speed;
         player->pos.x = sx_max(left_limit, player->pos.x);
@@ -754,7 +753,7 @@ static void update_player(float dt)
 
     if (the_input->get_bool(KEY_RIGHT)) {
         float right_limit = GAME_BOARD_WIDTH * 0.5f -
-                            sx_rect_width(the_sprite->draw_bounds(the_game.player.sprite)) * 0.5f -
+                            sx_rect_width(the_2d->sprite.draw_bounds(the_game.player.sprite)) * 0.5f -
                             the_game.tile_size * 0.1f;
         player->pos.x += dt * speed;
         player->pos.x = sx_min(right_limit, player->pos.x);
@@ -762,10 +761,10 @@ static void update_player(float dt)
 
     { // analog stick
         float right_limit = GAME_BOARD_WIDTH * 0.5f -
-                            sx_rect_width(the_sprite->draw_bounds(the_game.player.sprite)) * 0.5f -
+                            sx_rect_width(the_2d->sprite.draw_bounds(the_game.player.sprite)) * 0.5f -
                             the_game.tile_size * 0.1f;
         float left_limit = -GAME_BOARD_WIDTH * 0.5f +
-                           sx_rect_width(the_sprite->draw_bounds(the_game.player.sprite)) * 0.5f +
+                           sx_rect_width(the_2d->sprite.draw_bounds(the_game.player.sprite)) * 0.5f +
                            the_game.tile_size * 0.1f;
         float movex_analog = the_input->get_float(KEY_MOVEX_ANALOG);
         movex_analog = sx_sign(movex_analog) * sx_easeout_quad(sx_abs(movex_analog));
@@ -781,7 +780,7 @@ static void update_player(float dt)
             create_bullet(
                 sx_vec2f(player->pos.x,
                          player->pos.y +
-                             sx_rect_height(the_sprite->draw_bounds(player->sprite)) * 0.5f),
+                             sx_rect_height(the_2d->sprite.draw_bounds(player->sprite)) * 0.5f),
                 BULLET_TYPE_PLAYER);
             player->bullet_tm = 0;
 
@@ -799,7 +798,7 @@ static void check_bullet_collision_cb(int start, int end, int thrd_index, void* 
     }
 
     bullet_t* bullet = &the_game.bullets[cdata->bullet_index];
-    sx_rect bullet_rc = sx_rect_move(the_sprite->draw_bounds(bullet->sprite), bullet->pos);
+    sx_rect bullet_rc = sx_rect_move(the_2d->sprite.draw_bounds(bullet->sprite), bullet->pos);
     c2AABB bullet_aabb = { { bullet_rc.xmin, bullet_rc.ymax }, { bullet_rc.xmax, bullet_rc.ymin } };
 
     for (int i = start; i < end; i++) {
@@ -807,7 +806,7 @@ static void check_bullet_collision_cb(int start, int end, int thrd_index, void* 
             continue;
         }
 
-        sx_rect enemy_rc = sx_rect_move(the_sprite->draw_bounds(the_game.enemy_sprites[i]),
+        sx_rect enemy_rc = sx_rect_move(the_2d->sprite.draw_bounds(the_game.enemy_sprites[i]),
                                         the_game.enemies[i].pos);
         c2AABB enemy_aabb = { { enemy_rc.xmin, enemy_rc.ymax }, { enemy_rc.xmax, enemy_rc.ymin } };
         if (c2AABBtoAABB(bullet_aabb, enemy_aabb)) {
@@ -864,7 +863,7 @@ static void update_bullets(float dt)
             continue;
         }
 
-        sx_rect bullet_rc = sx_rect_move(the_sprite->draw_bounds(bullet->sprite), bullet->pos);
+        sx_rect bullet_rc = sx_rect_move(the_2d->sprite.draw_bounds(bullet->sprite), bullet->pos);
         c2AABB bullet_aabb = { { bullet_rc.xmin, bullet_rc.ymax },
                                { bullet_rc.xmax, bullet_rc.ymin } };
 
@@ -898,7 +897,7 @@ static void update_bullets(float dt)
             saucer_t* saucer = &the_game.saucer;
             if (!saucer->dead) {
                 sx_rect saucer_rc =
-                    sx_rect_move(the_sprite->draw_bounds(saucer->sprite), saucer->pos);
+                    sx_rect_move(the_2d->sprite.draw_bounds(saucer->sprite), saucer->pos);
                 c2AABB saucer_aabb = { { saucer_rc.xmin, saucer_rc.ymax },
                                        { saucer_rc.xmax, saucer_rc.ymin } };
                 if (c2AABBtoAABB(saucer_aabb, bullet_aabb)) {
@@ -911,7 +910,7 @@ static void update_bullets(float dt)
         } else if (bullet->type == BULLET_TYPE_ALIEN1) {
             // check collision with player
             sx_rect player_rc =
-                sx_rect_move(the_sprite->draw_bounds(the_game.player.sprite), the_game.player.pos);
+                sx_rect_move(the_2d->sprite.draw_bounds(the_game.player.sprite), the_game.player.pos);
             c2AABB player_aabb = { { player_rc.xmin, player_rc.ymax },
                                    { player_rc.xmax, player_rc.ymin } };
             if (c2AABBtoAABB(bullet_aabb, player_aabb) && !the_game.player_died) {
@@ -930,7 +929,7 @@ static void update_bullets(float dt)
                 cover_t* cover = &the_game.covers[ic];
                 if (!cover->dead) {
                     sx_rect cover_rc =
-                        sx_rect_move(the_sprite->draw_bounds(the_game.cover_sprite), cover->pos);
+                        sx_rect_move(the_2d->sprite.draw_bounds(the_game.cover_sprite), cover->pos);
                     c2AABB cover_aabb = { { cover_rc.xmin, cover_rc.ymax },
                                           { cover_rc.xmax, cover_rc.ymin } };
                     if (c2AABBtoAABB(bullet_aabb, cover_aabb)) {
@@ -961,7 +960,7 @@ static void update_bullets(float dt)
                 if (i != ib) {
                     bullet_t* bullet2 = &the_game.bullets[ib];
                     sx_rect bullet2_rc =
-                        sx_rect_move(the_sprite->draw_bounds(bullet2->sprite), bullet2->pos);
+                        sx_rect_move(the_2d->sprite.draw_bounds(bullet2->sprite), bullet2->pos);
                     c2AABB bullet2_aabb = { { bullet2_rc.xmin, bullet2_rc.ymax },
                                             { bullet2_rc.xmax, bullet2_rc.ymin } };
                     if (c2AABBtoAABB(bullet_aabb, bullet2_aabb)) {
@@ -1002,7 +1001,7 @@ static int check_collision_with_covers(enemy_t* e)
         return -1;
     }
 
-    sx_rect enemy_rc = sx_rect_move(the_sprite->draw_bounds(the_game.cover_sprite), e->pos);
+    sx_rect enemy_rc = sx_rect_move(the_2d->sprite.draw_bounds(the_game.cover_sprite), e->pos);
     c2AABB enemy_aabb = { { enemy_rc.xmin, enemy_rc.ymax }, { enemy_rc.xmax, enemy_rc.ymin } };
 
     for (int i = 0; i < NUM_COVERS; i++) {
@@ -1011,7 +1010,7 @@ static int check_collision_with_covers(enemy_t* e)
             continue;
         }
 
-        sx_rect cover_rc = sx_rect_move(the_sprite->draw_bounds(the_game.cover_sprite), cover->pos);
+        sx_rect cover_rc = sx_rect_move(the_2d->sprite.draw_bounds(the_game.cover_sprite), cover->pos);
         c2AABB cover_aabb = { { cover_rc.xmin, cover_rc.ymax }, { cover_rc.xmax, cover_rc.ymin } };
         
         if (c2AABBtoAABB(enemy_aabb, cover_aabb)) {
@@ -1059,7 +1058,7 @@ static void update(float dt)
 
         float speed = sx_lerp(1.0f, 4.0f, 1.0f - ((float)num_alive / (float)MAX_ENEMIES));
         dte = the_game.enemy_explosion ? 0.0f : (dt * speed);
-        the_sprite->animclip_update_batch(the_game.enemy_clips, MAX_ENEMIES, dte);
+        the_2d->sprite.animclip_update_batch(the_game.enemy_clips, MAX_ENEMIES, dte);
 
         for (int i = 0; i < num_alive; i++) {
             enemy_t* e = &the_game.enemies[alive_enemies[i]];
@@ -1169,10 +1168,10 @@ static void render_info_screen(game_state_t state)
     float w = (float)the_app->width();
     float h = (float)the_app->height();
 
-    const rizz_font* font = the_font->font_get(the_game.font);
+    const rizz_font* font = the_2d->font.get(the_game.font);
     sx_mat4 vp =
         sx_mat4_ortho_offcenter(0, h, w, 0, -5.0f, 5.0f, 0, the_gfx->GL_family());
-    the_font->set_viewproj_mat(font, &vp);
+    the_2d->font.set_viewproj_mat(font, &vp);
     char text[32];
     if (state == GAME_STATE_GAMEOVER) {
         sx_strcpy(text, sizeof(text), "GAME OVER");
@@ -1180,15 +1179,15 @@ static void render_info_screen(game_state_t state)
         sx_snprintf(text, sizeof(text), "STAGE  %d", the_game.stage + 1);
     }
 
-    rizz_font_bounds bounds = the_font->bounds(font, SX_VEC2_ZERO, text);
+    rizz_font_bounds bounds = the_2d->font.bounds(font, SX_VEC2_ZERO, text);
     sx_vec2 text_pos = sx_vec2f(w * 0.5f - sx_rect_width(bounds.rect) * 0.5f,
                                 h * 0.5f + sx_rect_height(bounds.rect));
-    the_font->draw(font, text_pos, text);
+    the_2d->font.draw(font, text_pos, text);
 
     char highscore_text[32];
     sx_snprintf(highscore_text, sizeof(highscore_text), "HIGH SCORE  %d", the_game.high_score);
-    bounds = the_font->bounds(font, SX_VEC2_ZERO, highscore_text);
-    the_font->draw(font,
+    bounds = the_2d->font.bounds(font, SX_VEC2_ZERO, highscore_text);
+    the_2d->font.draw(font,
                    sx_vec2f(w*0.5f - sx_rect_width(bounds.rect) * 0.5f, text_pos.y - 30.0f),
                    highscore_text);
 
@@ -1246,7 +1245,7 @@ static void show_devmenu(void)
         the_core->show_graphics_debugger(debug_gfx);
     }
     if (*debug_sprites) {
-        the_sprite->show_debugger(debug_sprites);
+        the_2d->sprite.show_debugger(debug_sprites);
     }
     if (*debug_sounds) {
         the_sound->show_debugger(debug_sounds);
@@ -1292,13 +1291,13 @@ static void render(void)
         }
     }
     if (num_enemies > 0) {
-        the_sprite->draw_batch(enemy_sprites, num_enemies, &vp, enemy_mats, NULL);
+        the_2d->sprite.draw_batch(enemy_sprites, num_enemies, &vp, enemy_mats, NULL);
     }
 
     // TODO: add another function for drawing by position
     if (!the_game.player_died) {
         sx_mat3 player_mat = sx_mat3_translatev(the_game.player.pos);
-        the_sprite->draw(the_game.player.sprite, &vp, &player_mat, SX_COLOR_WHITE);
+        the_2d->sprite.draw(the_game.player.sprite, &vp, &player_mat, SX_COLOR_WHITE);
     }
 
     if (the_game.num_bullets > 0) {
@@ -1309,7 +1308,7 @@ static void render(void)
             bullet_sprites[i] = the_game.bullets[i].sprite;
         }
 
-        the_sprite->draw_batch(bullet_sprites, the_game.num_bullets, &vp, bullet_mats, NULL);
+        the_2d->sprite.draw_batch(bullet_sprites, the_game.num_bullets, &vp, bullet_mats, NULL);
     }
 
     // explosions
@@ -1335,7 +1334,7 @@ static void render(void)
         }
 
         if (num_explosions > 0) {
-            the_sprite->draw_batch(explosion_sprites, num_explosions, &vp, explosion_mats, NULL);
+            the_2d->sprite.draw_batch(explosion_sprites, num_explosions, &vp, explosion_mats, NULL);
         }
     }
 
@@ -1355,14 +1354,14 @@ static void render(void)
             }
         }
         if (count > 0) {
-            the_sprite->draw_batch(cover_sprites, count, &vp, cover_mats, cover_colors);
+            the_2d->sprite.draw_batch(cover_sprites, count, &vp, cover_mats, cover_colors);
         }
     }
 
     // saucer
     if (!the_game.saucer.dead) {
         sx_mat3 mat = sx_mat3_translatev(the_game.saucer.pos);
-        the_sprite->draw(the_game.saucer.sprite, &vp, &mat, SX_COLOR_WHITE);
+        the_2d->sprite.draw(the_game.saucer.sprite, &vp, &mat, SX_COLOR_WHITE);
     }
 
     api->end_pass();
@@ -1375,15 +1374,15 @@ static void render(void)
         api->begin_default_pass(&(sg_pass_action) {
             .colors[0] = { SG_ACTION_DONTCARE }, .depth = {SG_ACTION_DONTCARE}}, w, h);
 
-        const rizz_font* font = the_font->font_get(the_game.font);
+        const rizz_font* font = the_2d->font.get(the_game.font);
         sx_mat4 vp = sx_mat4_ortho_offcenter(0, (float)h, (float)w, 0, -5.0f, 5.0f, 0, the_gfx->GL_family());
-        the_font->set_viewproj_mat(font, &vp);
-        the_font->drawf(font, sx_vec2f(10.0f, 30.0f), "SCORE  %d", the_game.player_score);
+        the_2d->font.set_viewproj_mat(font, &vp);
+        the_2d->font.drawf(font, sx_vec2f(10.0f, 30.0f), "SCORE  %d", the_game.player_score);
 
         char lives[32];
         sx_snprintf(lives, sizeof(lives), "LIVES  %d", the_game.player_lives);
-        rizz_font_bounds bounds = the_font->bounds(font, SX_VEC2_ZERO, lives);
-        the_font->drawf(font, sx_vec2f((float)(w - sx_rect_width(bounds.rect)*1.1f), 30.0f), lives);
+        rizz_font_bounds bounds = the_2d->font.bounds(font, SX_VEC2_ZERO, lives);
+        the_2d->font.drawf(font, sx_vec2f((float)(w - sx_rect_width(bounds.rect)*1.1f), 30.0f), lives);
         api->end_pass();
     }
     api->end(); // RENDER_STAGE_UI
@@ -1408,10 +1407,9 @@ rizz_plugin_decl_main(space_invaders, plugin, e)
         the_vfs = plugin->api->get_api(RIZZ_API_VFS, 0);
         the_asset = plugin->api->get_api(RIZZ_API_ASSET, 0);
         the_imgui = plugin->api->get_api_byname("imgui", 0);
-        the_sprite = plugin->api->get_api_byname("sprite", 0);
+        the_2d = plugin->api->get_api_byname("2dtools", 0);
         the_input = plugin->api->get_api_byname("input", 0);
         the_sound = plugin->api->get_api_byname("sound", 0);
-        the_font = plugin->api->get_api_byname("font", 0);
         the_plugin = plugin->api;
         init();
         break;
@@ -1436,10 +1434,9 @@ rizz_plugin_decl_event_handler(space_invaders, e)
     case RIZZ_APP_EVENTTYPE_UPDATE_APIS:
         // reload APIs. This event happens when one of the plugins are reloaded
         the_imgui = the_plugin->get_api_byname("imgui", 0);
-        the_sprite = the_plugin->get_api_byname("sprite", 0);
+        the_2d = the_plugin->get_api_byname("2dtools", 0);
         the_input = the_plugin->get_api_byname("input", 0);
         the_sound = the_plugin->get_api_byname("sound", 0);
-        the_font = the_plugin->get_api_byname("font", 0);
         break;
 
     case RIZZ_APP_EVENTTYPE_KEY_DOWN:
