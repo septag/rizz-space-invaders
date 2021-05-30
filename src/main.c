@@ -1206,27 +1206,27 @@ static void show_devmenu(void)
     if (the_imgui->BeginMainMenuBar())
     {
         if (the_imgui->BeginMenu("Debug", true)) {
-            if (the_imgui->MenuItemBool("Memory", NULL, *debug_mem, true)) {
+            if (the_imgui->MenuItem_Bool("Memory", NULL, *debug_mem, true)) {
                 *debug_mem = !(*debug_mem);
             }
 
-            if (the_imgui->MenuItemBool("Log", NULL, *show_log, true)) {
+            if (the_imgui->MenuItem_Bool("Log", NULL, *show_log, true)) {
                 *show_log = !(*show_log);
             }
 
-            if (the_imgui->MenuItemBool("Graphics", NULL, *debug_gfx, true)) {
+            if (the_imgui->MenuItem_Bool("Graphics", NULL, *debug_gfx, true)) {
                 *debug_gfx = !(*debug_gfx);
             }
 
-            if (the_imgui->MenuItemBool("Sprites", NULL, *debug_sprites, true)) {
+            if (the_imgui->MenuItem_Bool("Sprites", NULL, *debug_sprites, true)) {
                 *debug_sprites = !(*debug_sprites);
             }
 
-            if (the_imgui->MenuItemBool("Sounds", NULL, *debug_sounds, true)) {
+            if (the_imgui->MenuItem_Bool("Sounds", NULL, *debug_sounds, true)) {
                 *debug_sounds = !(*debug_sounds);
             }
 
-            if (the_imgui->MenuItemBool("Input", NULL, *debug_input, true)) {
+            if (the_imgui->MenuItem_Bool("Input", NULL, *debug_input, true)) {
                 *debug_input = !(*debug_input);
             }
             the_imgui->EndMenu();
@@ -1462,7 +1462,7 @@ rizz_game_decl_config(conf)
     conf->window_width = 600;
     conf->window_height = 800;
     conf->app_flags |= RIZZ_APP_FLAG_HIGHDPI;
-    conf->core_flags |= RIZZ_CORE_FLAG_PROFILE_GPU;
+    conf->core_flags |= RIZZ_CORE_FLAG_PROFILE_GPU | RIZZ_CORE_FLAG_LOG_TO_FILE;
     conf->log_level = RIZZ_LOG_LEVEL_DEBUG;
     conf->swap_interval = 1;
     conf->plugin_path = exe_path;
