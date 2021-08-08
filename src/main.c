@@ -168,7 +168,7 @@ typedef enum debugger_t {
 } debugger_t;
 
 typedef struct game_t {
-    const sx_alloc* alloc;
+    sx_alloc* alloc;
     sx_rng rng;
     enemy_t enemies[MAX_ENEMIES];
     enemy_t dummy_enemy;
@@ -559,23 +559,20 @@ static void create_covers(void)
         cover->health = 100;
     }
 
-    the_game.cover_sprite =
-        the_2d->sprite.create(&(rizz_sprite_desc){ .name = "cover.png",
-                                                .atlas = the_game.game_atlas,
-                                                .size = sx_vec2f(tile_size, 0),
-                                                .origin = sx_vec2f(-0.5f, -0.5f) });
+    the_game.cover_sprite = the_2d->sprite.create(&(rizz_sprite_desc){ .name = "cover.png",
+                                                                       .atlas = the_game.game_atlas,
+                                                                       .size = sx_vec2f(tile_size, 0),
+                                                                       .origin = sx_vec2f(-0.5f, -0.5f) });
 }
 
 static bool init()
 {
-    the_game.alloc = the_core->alloc(RIZZ_MEMID_GAME);
+    the_game.alloc = the_core->trace_alloc_create("Game",  RIZZ_MEMOPTION_INHERIT, NULL, the_core->heap_alloc());
 
-    sx_rng_seed_time(&the_game.rng);
+    sx_rng_seed_time(&the_game.rng );
 
-    the_game.render_stages[RENDER_STAGE_GAME] =
-        the_gfx->stage_register("game", (rizz_gfx_stage){ .id = 0 });
-    the_game.render_stages[RENDER_STAGE_UI] =
-        the_gfx->stage_register("ui", the_game.render_stages[RENDER_STAGE_GAME]);
+    the_game.render_stages[RENDER_STAGE_GAME] = the_gfx->stage_register("game", (rizz_gfx_stage){ .id = 0 });
+    the_game.render_stages[RENDER_STAGE_UI] = the_gfx->stage_register("ui", the_game.render_stages[RENDER_STAGE_GAME]);
     sx_assert(the_game.render_stages[RENDER_STAGE_GAME].id);
     sx_assert(the_game.render_stages[RENDER_STAGE_UI].id);
 
@@ -662,6 +659,7 @@ static void shutdown()
     the_2d->sprite.destroy(the_game.cover_sprite);
     the_2d->sprite.destroy(the_game.player.sprite);
     the_2d->sprite.destroy(the_game.saucer.sprite);
+    the_core->trace_alloc_destroy(the_game.alloc);
 }
 
 static void update_enemy(enemy_t* e, float dt)
@@ -1462,7 +1460,7 @@ rizz_game_decl_config(conf)
     conf->window_width = 600;
     conf->window_height = 800;
     conf->app_flags |= RIZZ_APP_FLAG_HIGHDPI;
-    conf->core_flags |= RIZZ_CORE_FLAG_PROFILE_GPU | RIZZ_CORE_FLAG_LOG_TO_FILE;
+    conf->core_flags |= RIZZ_CORE_FLAG_LOG_TO_FILE;
     conf->log_level = RIZZ_LOG_LEVEL_DEBUG;
     conf->swap_interval = 1;
     conf->plugin_path = exe_path;
